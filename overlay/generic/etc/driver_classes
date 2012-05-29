@@ -13,6 +13,7 @@ pci	pci
 emlxs	fibre-channel
 iscsi	scsi-self-identify
 lsimega	scsi
+imr_sas scsi
 mpt_sas	scsi-self-identifying
 mr_sas	scsi-self-identifying
 mega_sas	scsi
