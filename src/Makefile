@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-Wall -Wextra
 TARGETS=bootparams diskinfo disklist removable_disk disk_size \
     node-kstat/build/Release/kstat.node zoneevent \
-    node-zookeeper/build/Release/node-zookeeper.node \
+    node-zookeeper/build/Release/zookeeper_native.node \
     node-expat/build/Release/node-expat.node \
     node-syslog/build/Release/syslog.node \
     node-zsock/build/Release/zsock_bindings.node \
@@ -45,6 +45,7 @@ install: $(TARGETS) sysinfo
 	mkdir -m 0755 -p $(DESTDIR)/usr/node_modules
 	cp -Pr node_modules/* $(DESTDIR)/usr/node_modules
 	cp node-kstat/build/Release/kstat.node $(DESTDIR)/usr/node_modules/
+	cp node-zookeeper/build/Release/zookeeper_native.node $(DESTDIR)/usr/node_modules/
 	cp node-syslog/build/Release/syslog.node $(DESTDIR)/usr/node_modules/syslog.node
 	rm -rf $(DESTDIR)/usr/vm
 	cp -PR vm $(DESTDIR)/usr/
@@ -102,7 +103,7 @@ vmunbundle: vmunbundle.c
 node-kstat/build/Release/kstat.node: node-kstat/kstat.cc $(NODE_WAF)
 	(cd node-kstat && $(NODE_WAF) configure && $(NODE_WAF) build)
 
-node-zookeeper/build/Release/node-zookeeper.node: node-zookeeper/src/node-zk.cpp $(NODE_WAF)
+node-zookeeper/build/Release/zookeeper_native: node-zookeeper/src/node-zk.cpp $(NODE_WAF)
 	(cd node-zookeeper && $(NODE_WAF) configure && $(NODE_WAF) build)
 
 node-expat/build/Release/node-expat.node: node-expat/node-expat.cc $(NODE_WAF)
