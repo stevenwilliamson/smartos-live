@@ -2,6 +2,7 @@ CC=gcc
 CFLAGS=-Wall -Wextra
 TARGETS=bootparams diskinfo disklist removable_disk disk_size \
     node-kstat/build/Release/kstat.node zoneevent \
+    node-zookeeper/build/Release/node-zookeeper.node \
     node-expat/build/Release/node-expat.node \
     node-syslog/build/Release/syslog.node \
     node-zsock/build/Release/zsock_bindings.node \
@@ -100,6 +101,9 @@ vmunbundle: vmunbundle.c
 
 node-kstat/build/Release/kstat.node: node-kstat/kstat.cc $(NODE_WAF)
 	(cd node-kstat && $(NODE_WAF) configure && $(NODE_WAF) build)
+
+node-zookeeper/build/Release/node-zookeeper.node: node-zookeeper/src/node-zk.cpp $(NODE_WAF)
+	(cd node-zookeeper && $(NODE_WAF) configure && $(NODE_WAF) build)
 
 node-expat/build/Release/node-expat.node: node-expat/node-expat.cc $(NODE_WAF)
 	(cd node-expat && $(NODE_WAF) configure && $(NODE_WAF) build)
