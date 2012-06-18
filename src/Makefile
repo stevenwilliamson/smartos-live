@@ -103,7 +103,7 @@ vmunbundle: vmunbundle.c
 node-kstat/build/Release/kstat.node: node-kstat/kstat.cc $(NODE_WAF)
 	(cd node-kstat && $(NODE_WAF) configure && $(NODE_WAF) build)
 
-node-zookeeper/build/Release/zookeeper_native: node-zookeeper/src/node-zk.cpp $(NODE_WAF)
+node-zookeeper/build/Release/zookeeper_native.node: node-zookeeper/src/node-zk.cpp $(NODE_WAF)
 	(cd node-zookeeper && $(NODE_WAF) configure && $(NODE_WAF) build)
 
 node-expat/build/Release/node-expat.node: node-expat/node-expat.cc $(NODE_WAF)
