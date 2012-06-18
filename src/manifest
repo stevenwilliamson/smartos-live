@@ -101,6 +101,8 @@ f usr/node_modules/onlyif.js 0444 root bin
 f usr/node_modules/sprintf.js 0444 root bin
 f usr/node_modules/syslog.node 0444 root bin
 f usr/node_modules/system.js 0444 root bin
+f usr/node_modules/zookeeper.js 0444 root bin
+f usr/node_modules/underscore.js 0444 root bin
 d usr/node_modules/log4js 0555 root bin
 f usr/node_modules/log4js/package.json 0444 root bin
 d usr/node_modules/log4js/lib 0555 root bin
