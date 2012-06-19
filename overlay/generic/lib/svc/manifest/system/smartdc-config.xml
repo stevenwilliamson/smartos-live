@@ -64,6 +64,7 @@
 
 	<dependency
 		name='network-physical'
+		type='service'
 		grouping='require_all'
 		restart_on='none'>
 		<service_fmri value='svc:/network/physical:default' />
