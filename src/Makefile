@@ -168,6 +168,18 @@ $(ZUTIL_BINDINGS.NODE) :	LDFLAGS +=	$(NODE_LDFLAGS)
 $(ZUTIL_BINDINGS.NODE) :	LIBS +=		-lzonecfg
 
 #
+# thomas@freeagent:
+# NodeJS module for zookeeper
+#
+ZOOKEEPER_OBJDIR = node-zookeeper/build/Release
+ZOOKEEPER.NODE = $(ZOOKEEPER_OBJDIR)/zookeeper_native.node
+$(ZOOKEEPER.NODE) :	WARN_FLAGS +=	-Wno-unused
+$(ZOOKEEPER.NODE) :	CPPFLAGS +=	$(NODE_CPPFLAGS) -I$(ROOT)/src/${ZOOKEEPER_OBJDIR}/zk/include/zookeeper/
+$(ZOOKEEPER.NODE) :	CXXFLAGS +=	$(NODE_CFLAGS) -I$(ROOT)/src/${ZOOKEEPER_OBJDIR}/zk/include/zookeeper/
+$(ZOOKEEPER.NODE) :	LDFLAGS +=	$(NODE_LDFLAGS) -L$(ROOT)/src/${ZOOKEEPER_OBJDIR}/zk/lib
+$(ZOOKEEPER.NODE) :	LIBS +=		-lzookeeper_st
+
+#
 # List of targets.  TARGETS, SMARTDC_TARGETS, and SMARTDC_LIB_TARGETS must
 # include only those files that are safe to remove when the clean target is
 # built.
@@ -186,7 +198,8 @@ TARGETS = \
 	$(KSTAT.NODE) \
 	$(SYSLOG.NODE) \
 	$(ZSOCK_BINDINGS.NODE) \
-	$(ZUTIL_BINDINGS.NODE)
+	$(ZUTIL_BINDINGS.NODE) \
+	$(ZOOKEEPER.NODE)
 
 SMARTDC_TARGETS = \
 	qemu-exec
@@ -208,6 +221,7 @@ install: all
 	cp -Pr node_modules/* $(DESTDIR)/usr/node_modules
 	cp $(KSTAT.NODE) $(DESTDIR)/usr/node_modules/
 	cp $(SYSLOG.NODE) $(DESTDIR)/usr/node_modules/syslog.node
+	cp $(ZOOKEEPER.NODE) $(DESTDIR)/usr/node_modules/zookeeper_native.node
 	rm -rf $(DESTDIR)/usr/vm
 	cp -PR vm $(DESTDIR)/usr/
 	mkdir -m 0755 -p $(DESTDIR)/usr/vm/node_modules
@@ -296,6 +310,17 @@ $(KSTAT.NODE): node-kstat/kstat.cc
 
 $(SYSLOG.NODE): node-syslog/syslog.cc
 	@mkdir -p $(SYSLOG_OBJDIR)
+	$(GXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
+
+# <hack alert> Build the zookeeper c-library!
+$(ZOOKEEPER_OBJDIR)/zk/lib/libzookeeper_st.a:
+	@mkdir -p $(ZOOKEEPER_OBJDIR)/zk
+	(cd node-zookeeper/zk_c && \
+		CFLAGS='-pthread -D_POSIX_PTHREAD_SEMANTICS' LDFLAGS='-lnsl -lsocket' ./configure --without-syncapi --without-shared --disable-shared --with-pic --prefix=$(ROOT)/src/$(ZOOKEEPER_OBJDIR)/zk && \
+		make clean install )
+	
+$(ZOOKEEPER.NODE): node-zookeeper/src/node-zk.cpp $(ZOOKEEPER_OBJDIR)/zk/lib/libzookeeper_st.a
+	@mkdir -p $(ZOOKEEPER_OBJDIR)
 	$(GXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
 
 $(ZSOCK_BINDINGS.NODE): $(ZSOCK_SRCDIR)/zsock.cc
