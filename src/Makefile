@@ -279,10 +279,6 @@ install: all
 	cp -p $(SMARTDC_TARGETS) $(DESTDIR)/smartdc/bin
 	mkdir -p $(DESTDIR)/smartdc/lib
 	cp -p $(SMARTDC_LIB_TARGETS) $(DESTDIR)/smartdc/lib
-	mkdir -m 0755 -p $(DESTDIR)/usr/node_modules
-	cp -Pr node_modules/* $(DESTDIR)/usr/node_modules
-	mkdir -m 0755 -p $(PREFIX_NODE)/node_modules
-	cp -Pr node_modules/* $(PREFIX_NODE)/node_modules
 	cp $(KSTAT.NODE) $(PREFIX_NODE)/node_modules/
 	cp $(SYSLOG.NODE) $(PREFIX_NODE)/node_modules/syslog.node
 	cp $(ZOOKEEPER.NODE) $(PREFIX_NODE)/node_modules/zookeeper_native.node
