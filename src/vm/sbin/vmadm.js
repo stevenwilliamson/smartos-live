@@ -1,4 +1,4 @@
-#!/usr/bin/node
+#!/usr/node/bin/node
 /*
  * CDDL HEADER START
  *
@@ -26,11 +26,10 @@
  */
 
 var fs = require('fs');
-var VM = require('VM');
-var nopt = require('nopt');
-var onlyif = require('onlyif');
-var path = require('path');
-var sprintf = require('sprintf').sprintf;
+var VM = require('/usr/vm/node_modules/VM');
+var nopt = require('/usr/vm/node_modules/nopt');
+var onlyif = require('/usr/node/node_modules/onlyif');
+var sprintf = require('/usr/node/node_modules/sprintf').sprintf;
 var tty = require('tty');
 var util = require('util');
 
@@ -213,13 +212,27 @@ function getUUID(command, p)
     return usage('Invalid or missing UUID for ' + command);
 }
 
-function parseKeyEqualsValue(args)
+/*
+ * When the 'multiple' argument is true, we return an array of values like:
+ *
+ * [ {key1: value1}, {key2: value2} ]
+ *
+ * when false we return an object and where keys collide, last one wins.
+ */
+function parseKeyEqualsValue(args, multiple)
 {
     var arg;
     var key;
     var kv;
-    var parsed = {};
+    var obj;
+    var parsed;
     var val;
+
+    if (multiple) {
+        parsed = [];
+    } else {
+        parsed = {};
+    }
 
     for (arg in args) {
         kv = args[arg].split('=');
@@ -228,7 +241,13 @@ function parseKeyEqualsValue(args)
         } else {
             key = kv[0];
             val = kv.slice(1).join('=');
-            parsed[key] = val;
+            if (multiple) {
+                obj = {};
+                obj[key] = val;
+                parsed.push(obj);
+            } else {
+                parsed[key] = val;
+            }
         }
     }
 
@@ -239,32 +258,45 @@ function parseStartArgs(args)
 {
     var extra = {};
     var model;
-    var parsed;
     var p;
+    var pair;
+    var parsed;
+    var saw_order = false;
     var key;
     var val;
 
-    parsed = parseKeyEqualsValue(args);
-    for (key in parsed) {
-        val = parsed[key];
-        if (key === 'order') {
-            extra.boot = 'order=' + val;
-        } else if (key === 'disk' || key === 'cdrom') {
-            p = val.split(',')[0];
-            model = val.split(',')[1];
-            if (!model || !p || p.length === 0 || model.length === 0) {
-                usage('Parameter to ' + key + ' must be: path,model');
+    parsed = parseKeyEqualsValue(args, true);
+    for (pair in parsed) {
+        pair = parsed[pair];
+        for (key in pair) {
+            val = pair[key];
+            if (key === 'order') {
+                // only want one order option, multiple will be an error here.
+                if (saw_order) {
+                    usage('You can only specify \'order\' once when starting a '
+                        + 'VM');
+                    // NOTREACHED
+                }
+                extra.boot = 'order=' + val;
+                saw_order = true;
+            } else if (key === 'disk' || key === 'cdrom') {
+                p = val.split(',')[0];
+                model = val.split(',')[1];
+                if (!model || !p || p.length === 0 || model.length === 0) {
+                    usage('Parameter to ' + key + ' must be: path,model');
+                }
+                if (VM.DISK_MODELS.indexOf(model) === -1) {
+                    usage('Invalid model "' + model + '": model must be one '
+                        + 'of: ' + VM.DISK_MODELS.join(','));
+                }
+                if (!extra.disks) {
+                    extra.disks = [];
+                }
+                extra.disks.push({path: p, model: model, media: key});
+            } else {
+                usage('Invalid argument to start: ' + key);
+                // NOTREACHED
             }
-            if (VM.DISK_MODELS.indexOf(model) === -1) {
-                usage('Invalid model "' + model + '": model must be one of: '
-                    + VM.DISK_MODELS.join(','));
-            }
-            if (!extra.disks) {
-                extra.disks = [];
-            }
-            extra.disks.push({path: p, model: model, media: key});
-        } else {
-            usage('Invalid argument to start: ' + key);
         }
     }
 
@@ -325,7 +357,6 @@ function addCommandOptions(command, opts, shorts)
     case 'receive':
     case 'recv':
     case 'update':
-        opts.file = path;
         shorts.f = ['--file'];
         break;
     case 'list':

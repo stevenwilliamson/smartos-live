@@ -15,13 +15,7 @@ CSTYLE =	$(ROOT)/tools/cstyle
 #
 # Tool options
 #
-JSSTYLE_OPTS = \
-	-o indent=4 \
-	-o strict-indent=1 \
-	-o doxygen \
-	-o unparenthesized-return=0 \
-	-o continuation-at-front=1 \
-	-o leading-right-paren-ok=1
+JSSTYLE_OPTS = -o indent=4,strict-indent=1,doxygen,unparenthesized-return=0,continuation-at-front=1,leading-right-paren-ok=1
 
 #
 # Installation configuration.  Note that DESTDIR in particular is also
@@ -33,6 +27,13 @@ JSSTYLE_OPTS = \
 # subdirectory.
 #
 DESTDIR =		../proto
+
+#
+# DESTNAME is used for the manifest target.  We set it to something
+# obvious here so that if it's not set, the manifest target doesn't do
+# bad things.
+#
+DESTNAME =	live.manifest
 
 SMARTDCBINDIR =	$(DESTDIR)/smartdc/bin
 SMARTDCLIBDIR =	$(DESTDIR)/smartdc/lib
@@ -117,6 +118,67 @@ $(SYSLOG.NODE) :	CXXFLAGS +=	$(NODE_CFLAGS)
 $(SYSLOG.NODE) :	LDFLAGS +=	$(NODE_LDFLAGS)
 
 #
+# The sqlite3 add-on uses a combination of C + C++ files in multiple
+# directories, and has multiple header directories as well.
+#
+SQLITE3_OBJDIR =	node-sqlite3/build/Release
+SQLITE3_SRCDIR =	node-sqlite3/src
+SQLITE3_LIBSRCDIR =	node-sqlite3/deps/sqlite3
+SQLITE3_BINDINGS.NODE =	$(SQLITE3_OBJDIR)/node_sqlite3.node
+
+SQLITE3_SRCS += \
+	database.cc \
+	node_sqlite3.cc \
+	statement.cc
+
+SQLITE3_LIBSRCS +=	sqlite3.c
+
+SQLITE3_NODEHDRS += \
+	async.h \
+	macros.h \
+	statement.h \
+	threading.h
+
+SQLITE3_LIBHDRS += \
+	sqlite3.h \
+	sqlite3ext.h
+
+SQLITE3_OBJS =		\
+			$(SQLITE3_SRCS:%.cc=$(SQLITE3_OBJDIR)/%.o) \
+			$(SQLITE3_LIBSRCS:%.c=$(SQLITE3_OBJDIR)/%.o)
+SQLITE3_HDRS =		\
+			$(SQLITE3_NODEHDRS:%=$(SQLITE3_SRCDIR)/%) \
+			$(SQLITE3_LIBHDRS:%=$(SQLITE3_LIBSRCDIR)/%)
+CLEANFILES +=		$(SQLITE3_OBJS)
+
+SQLITE3_FLAGS = \
+				-fdata-sections \
+				-ffunction-sections \
+				-fno-omit-frame-pointer \
+				-fno-strict-aliasing \
+				-fno-exceptions
+
+$(SQLITE3_BINDINGS.NODE) :	WARN_FLAGS =	-Wall -Werror
+$(SQLITE3_BINDINGS.NODE) :	CPPFLAGS += \
+				$(NODE_CPPFLAGS) \
+				-I$(SQLITE3_LIBSRCDIR) \
+				-D_SQLITE_THREADSAFE=1 \
+				-D_SQLITE_ENABLE_FTS3 \
+				-D_SQLITE_ENABLE_RTREE \
+				-D_LARGEFILE_SOURCE \
+				-D_FILE_OFFSET_BITS=64 \
+				-D_REENTRANT \
+				-D_NDEBUG \
+				-D_POSIX_PTHREAD_SEMANTICS
+$(SQLITE3_BINDINGS.NODE) :	CFLAGS += \
+				$(NODE_CFLAGS) \
+				$(SQLITE3_FLAGS)
+$(SQLITE3_BINDINGS.NODE) :	LDFLAGS += \
+				$(NODE_LDFLAGS) \
+				-Wl,-soname=node_sqlite3.node
+$(SQLITE3_BINDINGS.NODE) :	LIBS += -lpthread
+
+#
 # The zsock add-on places its single source file in a subdirectory.
 #
 ZSOCK_OBJDIR =	node-zsock/build/Release
@@ -162,7 +224,7 @@ ZUTIL_BINDINGS_HDRS =	$(ZUTIL_HDRS:%=$(ZUTIL_SRCDIR)/%)
 CLEANFILES +=		$(ZUTIL_BINDINGS_OBJS)
 
 $(ZUTIL_BINDINGS.NODE) :	WARN_FLAGS +=	-Wno-unused
-$(ZUTIL_BINDINGS.NODE) :	CPPFLAGS +=	$(NODE_CPPFLAGS)
+$(ZUTIL_BINDINGS.NODE) :	CPPFLAGS +=	$(NODE_CPPFLAGS) -DSunOS
 $(ZUTIL_BINDINGS.NODE) :	CXXFLAGS +=	$(NODE_CFLAGS)
 $(ZUTIL_BINDINGS.NODE) :	LDFLAGS +=	$(NODE_LDFLAGS)
 $(ZUTIL_BINDINGS.NODE) :	LIBS +=		-lzonecfg
@@ -197,6 +259,7 @@ TARGETS = \
 	$(EXPAT.NODE) \
 	$(KSTAT.NODE) \
 	$(SYSLOG.NODE) \
+	$(SQLITE3_BINDINGS.NODE) \
 	$(ZSOCK_BINDINGS.NODE) \
 	$(ZUTIL_BINDINGS.NODE) \
 	$(ZOOKEEPER.NODE)
@@ -207,8 +270,7 @@ SMARTDC_TARGETS = \
 SMARTDC_LIB_TARGETS = \
 	sdc-on-tty
 
-all: $(TARGETS) sysinfo $(SMARTDC_TARGETS) $(SMARTDC_LIB_TARGETS) \
-    vm/tests.tar.gz
+all: $(TARGETS) sysinfo $(SMARTDC_TARGETS) $(SMARTDC_LIB_TARGETS)
 
 install: all
 	mkdir -p $(DESTDIR)/usr/bin
@@ -219,25 +281,40 @@ install: all
 	cp -p $(SMARTDC_LIB_TARGETS) $(DESTDIR)/smartdc/lib
 	mkdir -m 0755 -p $(DESTDIR)/usr/node_modules
 	cp -Pr node_modules/* $(DESTDIR)/usr/node_modules
-	cp $(KSTAT.NODE) $(DESTDIR)/usr/node_modules/
-	cp $(SYSLOG.NODE) $(DESTDIR)/usr/node_modules/syslog.node
-	cp $(ZOOKEEPER.NODE) $(DESTDIR)/usr/node_modules/zookeeper_native.node
+	mkdir -m 0755 -p $(PREFIX_NODE)/node_modules
+	cp -Pr node_modules/* $(PREFIX_NODE)/node_modules
+	cp $(KSTAT.NODE) $(PREFIX_NODE)/node_modules/
+	cp $(SYSLOG.NODE) $(PREFIX_NODE)/node_modules/syslog.node
+	cp $(ZOOKEEPER.NODE) $(PREFIX_NODE)/node_modules/zookeeper_native.node
 	rm -rf $(DESTDIR)/usr/vm
 	cp -PR vm $(DESTDIR)/usr/
 	mkdir -m 0755 -p $(DESTDIR)/usr/vm/node_modules
-	mkdir -p $(DESTDIR)/usr/vm/node_modules/{zsock,zutil}/build/Release
+	mkdir -p $(PREFIX_NODE)/node_modules/{zsock,zutil}/build/Release
+	mkdir -p $(DESTDIR)/usr/vm/test/tests
+	cp -Pr vm/common $(DESTDIR)/usr/vm/test/
+	cp -Pr vm/node-tap $(DESTDIR)/usr/vm/test/
+	cp -Pr vm/tests $(DESTDIR)/usr/vm/test/
+	cp vm/runtest $(DESTDIR)/usr/vm/test/
+	cp vm/runtests $(DESTDIR)/usr/vm/test/
 	cp -Pr node-zsock/{package.json,lib} \
-	    $(DESTDIR)/usr/vm/node_modules/zsock
+	    $(PREFIX_NODE)/node_modules/zsock
 	cp -Pr node-zutil/{package.json,lib} \
-	    $(DESTDIR)/usr/vm/node_modules/zutil
+	    $(PREFIX_NODE)/node_modules/zutil
+	cp $(SQLITE3_BINDINGS.NODE) \
+	    $(PREFIX_NODE)/node_modules
+	(sed -e "s|var sqlite3.*;|var sqlite3 = module.exports = exports = require('./node_sqlite3');|" | \
+	    sed -e "s|var trace = require.*;|var trace = require('./sqlite3_trace')|") \
+	    < node-sqlite3/lib/sqlite3.js \
+	    > $(PREFIX_NODE)/node_modules/sqlite3.js
+	cp node-sqlite3/lib/trace.js $(PREFIX_NODE)/node_modules/sqlite3_trace.js
 	cp $(ZSOCK_BINDINGS.NODE) \
-	    $(DESTDIR)/usr/vm/node_modules/zsock/build/Release
+	    $(PREFIX_NODE)/node_modules/zsock/build/Release
 	cp $(ZUTIL_BINDINGS.NODE) \
-	    $(DESTDIR)/usr/vm/node_modules/zutil/build/Release
-	cp $(EXPAT.NODE) $(DESTDIR)/usr/vm/node_modules/expat_binding.node
-	sed -e "s|var expat.*;|var expat = require('expat_binding');|" \
+	    $(PREFIX_NODE)/node_modules/zutil/build/Release
+	cp $(EXPAT.NODE) $(PREFIX_NODE)/node_modules/expat_binding.node
+	sed -e "s|var expat.*;|var expat = require('./expat_binding');|" \
 	    < node-expat/lib/node-expat.js \
-	    > $(DESTDIR)/usr/vm/node_modules/node-expat.js
+	    > $(PREFIX_NODE)/node_modules/node-expat.js
 	cp zoneevent $(DESTDIR)/usr/vm/sbin/zoneevent
 	cp zfs_send $(DESTDIR)/usr/vm/sbin/zfs_send
 	cp zfs_recv $(DESTDIR)/usr/vm/sbin/zfs_recv
@@ -257,8 +334,9 @@ install: all
 
 check: $(JSLINT)
 	@echo "==> Running cstyle..."
+	@# cstyle doesn't echo as it goes so we add an echo to each line below
 	@(for file in $(C_CHECK_TARGETS); do \
-		echo $(PWD)/$$file; \ # cstyle doesn't echo as it goes
+		echo $(PWD)/$$file; \
 		$(CSTYLE) $$file; \
 	done)
 	@printf "\nC files ok!\n"
@@ -266,11 +344,21 @@ check: $(JSLINT)
 	@$(JSLINT) --nologo --conf=$(ROOT)/tools/jsl.node.conf \
 	    $(JS_CHECK_TARGETS)
 	@printf "\n==> Running jsstyle...\n"
+	@# jsstyle doesn't echo as it goes so we add an echo to each line below
 	@(for file in $(JS_CHECK_TARGETS); do \
-		echo $(PWD)/$$file; \ # jsstyle doesn't echo as it goes
+		echo $(PWD)/$$file; \
 		$(JSSTYLE) $(JSSTYLE_OPTS) $$file; \
+		[[ $$? == "0" ]] || exit 1; \
 	done)
 	@printf "\nJS style ok!\n"
+
+.PHONY: manifest
+manifest:
+	(cat manifest && cd vm && \
+	    echo "# list of tests is autogenerated by smartos-live/src/Makefile" && \
+	    find tests/ -type f -exec echo "{}" "0444 root bin" \;) \
+	    | sed -e "s|^tests/|f usr/vm/test/tests/|" \
+	    > $(DESTDIR)/$(DESTNAME) \
 
 $(JSLINT):
 	(cd $(ROOT); $(MAKE) jsl)
@@ -278,6 +366,7 @@ $(JSLINT):
 clean:
 	-rm -f $(TARGETS) $(SMARTDC_TARGETS) $(SMARTDC_LIB_TARGETS) *.o \
 	    $(CLEANFILES)
+	-rm -rf node-sqlite3/build
 
 include Makefile.targ
 
@@ -291,10 +380,6 @@ disklist:
 
 sysinfo:
 	touch sysinfo
-
-.PHONY: vm/tests.tar.gz
-vm/tests.tar.gz:
-	(cd vm && ./tools/build-test-tarball.sh)
 
 #
 # Node native add-on target patterns.  Follow these patterns when adding a new
@@ -322,6 +407,17 @@ $(ZOOKEEPER_OBJDIR)/zk/lib/libzookeeper_st.a:
 $(ZOOKEEPER.NODE): node-zookeeper/src/node-zk.cpp $(ZOOKEEPER_OBJDIR)/zk/lib/libzookeeper_st.a
 	@mkdir -p $(ZOOKEEPER_OBJDIR)
 	$(GXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
+
+$(SQLITE3_OBJDIR)/%.o: $(SQLITE3_SRCDIR)/%.cc $(SQLITE3_HDRS)
+	@mkdir -p $(SQLITE3_OBJDIR)
+	$(GXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ -c $<
+
+$(SQLITE3_OBJDIR)/%.o: $(SQLITE3_LIBSRCDIR)/%.c $(SQLITE3_HDRS)
+	@mkdir -p $(SQLITE3_OBJDIR)
+	$(GCC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
+
+$(SQLITE3_BINDINGS.NODE): $(SQLITE3_OBJS)
+	$(GXX) $(LDFLAGS) -o $@ $(SQLITE3_OBJS) $(LIBS)
 
 $(ZSOCK_BINDINGS.NODE): $(ZSOCK_SRCDIR)/zsock.cc
 	@mkdir -p $(ZSOCK_OBJDIR)

@@ -6,7 +6,12 @@ ROOT =		$(PWD)
 PROTO =		$(ROOT)/proto
 STRAP_PROTO =	$(ROOT)/proto.strap
 MPROTO =	$(ROOT)/manifest.d
+
+ifeq ($(shell uname -s),Darwin)
+PATH =		/bin:/usr/bin:/usr/sbin:/sbin:/opt/local/bin
+else
 PATH =		/usr/bin:/usr/sbin:/sbin:/opt/local/bin
+endif
 
 LOCAL_SUBDIRS :=	$(shell ls projects/local)
 OVERLAYS :=	$(shell cat overlay/order)
@@ -18,7 +23,6 @@ CSTYLE =	$(ROOT)/tools/cstyle
 ADJUNCT_TARBALL :=	$(shell ls `pwd`/illumos-adjunct*.tgz 2>/dev/null \
 	| tail -n1 && echo $?)
 
-VMTESTS :=	$(ROOT)/src/vm/tests.tar.gz
 STAMPFILE :=	$(ROOT)/proto/buildstamp
 
 WORLD_MANIFESTS := \
@@ -39,10 +43,6 @@ live: world manifest
 	(cd $(ROOT) && \
 	    pfexec ./tools/build_live $(ROOT)/$(MANIFEST) $(ROOT)/output \
 	    $(OVERLAYS) $(ROOT)/proto $(ROOT)/man/man)
-	if [[ -f $(VMTESTS) && -f $(STAMPFILE) ]]; then \
-		pfexec cp $(VMTESTS) \
-		    $(ROOT)/output/vmtests-$$(cat $(STAMPFILE)).tgz ; \
-	fi
 
 #
 # Manifest construction.  There are 5 sources for manifests we need to collect
@@ -60,8 +60,9 @@ manifest: $(MANIFEST)
 $(MPROTO):
 	mkdir -p $(MPROTO)
 
-$(MPROTO)/live.manifest: $(MPROTO) src/manifest
-	cp src/manifest $(MPROTO)/live.manifest
+$(MPROTO)/live.manifest: $(MPROTO)
+	gmake DESTDIR=$(MPROTO) DESTNAME=live.manifest \
+	    -C src manifest
 
 $(MPROTO)/illumos.manifest: $(MPROTO) projects/illumos/manifest
 	cp projects/illumos/manifest $(MPROTO)/illumos.manifest

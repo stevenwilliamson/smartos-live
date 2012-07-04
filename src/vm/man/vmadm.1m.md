@@ -211,6 +211,8 @@ tab-complete UUIDs rather than having to type them out for every command.
             ,once=d to boot off an ISO image once and then after the install
             is complete you will boot on the hard drive.
 
+            The order= option can only be specified once per boot.
+
           cdrom=/path/to/image.iso,[ide|scsi|virtio]
 
             This option lets you add a virtual CD-ROM disk to a VM for this
@@ -221,6 +223,9 @@ tab-complete UUIDs rather than having to type them out for every command.
             The second part of this parameter (after the comma) indicates which
             model the CD-ROM drive should be. You should choose ide in most
             cases.
+
+            You can specify multiple cdrom options when booting a VM. They will
+            be attached in the order they appear on the cmdline.
 
           disk=/path/to/disk,[ide|scsi|virtio]
 
@@ -233,6 +238,9 @@ tab-complete UUIDs rather than having to type them out for every command.
             model the virtual drive should be. You should choose virtio when
             you know that the VM supports it, and ide or scsi otherwise
             depending on the drivers supported in the guest.
+
+            You can specify multiple disk options when booting a VM. They will
+            be attached in the order they appear on the cmdline.
 
       stop <uuid> [-F]
 
@@ -587,6 +595,20 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: yes (special, see description in 'update' section above)
         default: no
+
+    disks.*.nocreate:
+
+        This parameter indicates whether or not the disk should be created. It
+        only makes sense for disks with media type 'disk'. For media type
+        'cdrom' the device is not created. It also can only be set when
+        creating a disk.
+
+        type: boolean
+        vmtype: KVM
+        listable: no
+        create: yes
+        update: no (except when adding new disks)
+        default: false (new zvol is created when media type is 'disk')
 
     disks.*.image_name:
 
