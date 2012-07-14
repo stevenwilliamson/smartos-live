@@ -236,9 +236,9 @@ $(ZUTIL_BINDINGS.NODE) :	LIBS +=		-lzonecfg
 ZOOKEEPER_OBJDIR = node-zookeeper/build/Release
 ZOOKEEPER.NODE = $(ZOOKEEPER_OBJDIR)/zookeeper_native.node
 $(ZOOKEEPER.NODE) :	WARN_FLAGS +=	-Wno-unused
-$(ZOOKEEPER.NODE) :	CPPFLAGS +=	$(NODE_CPPFLAGS) -I$(ROOT)/src/${ZOOKEEPER_OBJDIR}/zk/include/zookeeper/
-$(ZOOKEEPER.NODE) :	CXXFLAGS +=	$(NODE_CFLAGS) -I$(ROOT)/src/${ZOOKEEPER_OBJDIR}/zk/include/zookeeper/
-$(ZOOKEEPER.NODE) :	LDFLAGS +=	$(NODE_LDFLAGS) -L$(ROOT)/src/${ZOOKEEPER_OBJDIR}/zk/lib
+$(ZOOKEEPER.NODE) :	CPPFLAGS +=	$(NODE_CPPFLAGS) -I$(DESTDIR)/usr/include/zookeeper
+$(ZOOKEEPER.NODE) :	CXXFLAGS +=	$(NODE_CFLAGS) -I$(DESTDIR)/usr/include/zookeeper
+$(ZOOKEEPER.NODE) :	LDFLAGS +=	$(NODE_LDFLAGS) -L$(DESTDIR)/usr/lib
 $(ZOOKEEPER.NODE) :	LIBS +=		-lzookeeper_st
 
 #
@@ -399,7 +399,7 @@ $(SYSLOG.NODE): node-syslog/syslog.cc
 $(ZOOKEEPER_OBJDIR)/zk/lib/libzookeeper_st.a:
 	@mkdir -p $(ZOOKEEPER_OBJDIR)/zk
 	(cd node-zookeeper/zk_c && \
-		CFLAGS='-pthread -D_POSIX_PTHREAD_SEMANTICS' LDFLAGS='-lnsl -lsocket' ./configure --without-syncapi --without-shared --disable-shared --with-pic --prefix=$(ROOT)/src/$(ZOOKEEPER_OBJDIR)/zk && \
+		CFLAGS='-pthread -D_POSIX_PTHREAD_SEMANTICS' LDFLAGS='-lnsl -lsocket' ./configure --without-syncapi --without-shared --disable-shared --with-pic --prefix=/usr && \
 		make clean install )
 	
 $(ZOOKEEPER.NODE): node-zookeeper/src/node-zk.cpp $(ZOOKEEPER_OBJDIR)/zk/lib/libzookeeper_st.a
