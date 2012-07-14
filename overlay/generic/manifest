@@ -59,10 +59,7 @@ f etc/resolv.conf 0644 netadm netadm
 d kernel/drv 0755 root sys
 f kernel/drv/cpqary3.conf 0644 root sys
 f kernel/drv/amd64/cpqary3 0755 root sys
-f kernel/drv/amd64/imr_sas 0755 root sys
 f kernel/drv/amd64/bnx 0755 root sys
-f kernel/drv/imr_sas 0755 root sys
-f kernel/drv/imr_sas.conf 0644 root sys
 d usr/lib/localedef 0755 root bin
 d usr/lib/localedef/extensions 0755 root bin
 f usr/lib/localedef/extensions/UTF-8.x 0444 root bin
