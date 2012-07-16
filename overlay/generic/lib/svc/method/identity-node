@@ -103,7 +103,7 @@ if [[ -z ${ipaddr} ]]; then
     ipaddr=$(set | grep "^SYSINFO_Network_Interface_.*_IPv4_Address" | head -n1 | cut -d'=' -f2)
 fi
 if [[ -n ${ipaddr} ]]; then
-    printf "${ipaddr}\t${hostname}\n" >> /etc/hosts
+    printf "${ipaddr}\t${hostname}\t${hostname}.local\n" >> /etc/hosts
 fi
 
 # Reset the library path now that we are past the critical stage
