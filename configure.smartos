@@ -23,7 +23,7 @@ ON_CLOSED_BINS_URL="http://192.168.11.253/build_files/on-closed-bins.i386.tar.bz
 ON_CLOSED_BINS_ND_URL="http://192.168.11.253/build_files/on-closed-bins-nd.i386.tar.bz2"
 ILLUMOS_EXTRA_TARBALL_URL="http://192.168.11.253/build_files/illumos-extra/"
 
-GET_ILLUMOS="(git clone http://github.com/joshado/illumos-joyent illumos)"
+GET_ILLUMOS="(git clone http://github.com/joyent/illumos-joyent illumos)"
 GET_ILLUMOS_EXTRA="git clone http://github.com/joyent/illumos-extra illumos-extra"
 ILLUMOS_ADJUNCT_TARBALL_URL="https://download.joyent.com/pub/build/adjuncts/"
 OVERLAYS="smartos generic"
