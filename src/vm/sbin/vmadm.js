@@ -1,4 +1,4 @@
-#!/usr/node/bin/node
+#!/usr/node/bin/node --abort_on_uncaught_exception
 /*
  * CDDL HEADER START
  *
@@ -21,17 +21,22 @@
  *
  * CDDL HEADER END
  *
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  *
  */
 
+var async = require('/usr/node/node_modules/async');
 var fs = require('fs');
+var fwLog = require('/usr/fw/lib/util/log');
 var VM = require('/usr/vm/node_modules/VM');
 var nopt = require('/usr/vm/node_modules/nopt');
 var onlyif = require('/usr/node/node_modules/onlyif');
+var panic = require('/usr/node/node_modules/panic');
 var sprintf = require('/usr/node/node_modules/sprintf').sprintf;
 var tty = require('tty');
 var util = require('util');
+
+VM.logname = 'vmadm';
 
 // VM.DEBUG=true;
 
@@ -39,7 +44,9 @@ var COMMANDS = [
     'start', 'boot',
     'console',
     'create',
+    'create-snapshot',
     'delete', 'destroy',
+    'delete-snapshot',
     'stop', 'halt',
     'help',
     'info',
@@ -49,9 +56,12 @@ var COMMANDS = [
     'lookup',
     'reboot',
     'receive', 'recv',
+    'reprovision',
+    'rollback-snapshot',
     'send',
     'sysrq',
-    'update'
+    'update',
+    'validate'
 ];
 
 /*
@@ -104,7 +114,7 @@ function usage(message, code)
 {
     var out;
 
-    if (code === null) {
+    if (!code) {
         code = 2;
     }
 
@@ -121,21 +131,27 @@ function usage(message, code)
     out('Usage: ' + process.argv[1] + ' <command> [options]');
     out('');
     out('create [-f <filename>]');
+    out('create-snapshot <uuid> <snapname>');
     out('console <uuid>');
     out('delete <uuid>');
+    out('delete-snapshot <uuid> <snapname>');
     out('get <uuid>');
     out('info <uuid> [type,...]');
     out('install <uuid>');
     out('list [-p] [-H] [-o field,...] [-s field,...] [field=value ...]');
-    out('lookup [-j|-1] [field=value ...]');
+    out('lookup [-j|-1] [-o field,...] [field=value ...]');
     out('reboot <uuid> [-F]');
     out('receive [-f <filename>]');
+    out('reprovision [-f <filename>]');
+    out('rollback-snapshot <uuid> <snapname>');
     out('send <uuid> [target]');
     out('start <uuid> [option=value ...]');
     out('stop <uuid> [-F]');
     out('sysrq <uuid> <nmi|screenshot>');
     out('update <uuid> [-f <filename>]');
     out(' -or- update <uuid> property=value [property=value ...]');
+    out('validate create [-f <filename>]');
+    out('validate update <brand> [-f <filename>]');
     out('');
     out('For more detailed information on the use of this command,'
         + 'type \'man vmadm\'.');
@@ -151,7 +167,8 @@ function validFilterKey(key)
     disk_re = new RegExp('^disks\.[\*0-9]*\.'
         + '(boot|image_name|image_size|image_uuid|size|media|model|zpool)$');
     nic_re = new RegExp('nics\.[\*0-9]*\.'
-        + '(dhcp_server|gateway|interface|ip|mac|model|netmask|vlan_id)$');
+        + '(dhcp_server|gateway|interface|ip|mac|model|netmask|nic_tag'
+        + '|vlan_id)$');
 
     if (LIST_FIELDS.hasOwnProperty(key)) {
         return true;
@@ -172,6 +189,22 @@ function validFilterKey(key)
     }
 
     return false;
+}
+
+// just rules out some confusing options that work for lookup but don't make
+// sense in list form.
+function validColumnKey(key)
+{
+    var bad_re;
+
+    // when we have a .*. we won't know which one to show
+    bad_re = new RegExp('^(disks|filesystems|nics)\.\\*\.*');
+
+    if (key.match(bad_re)) {
+        return false;
+    }
+
+    return true;
 }
 
 function getListProperties(field)
@@ -335,14 +368,17 @@ function addCommandOptions(command, opts, shorts)
 
     switch (command) {
     case 'boot':
+    case 'create-snapshot':
     case 'console':
     case 'delete':
+    case 'delete-snapshot':
     case 'destroy':
     case 'get':
     case 'help':
     case 'info':
     case 'install':
     case 'json':
+    case 'rollback-snapshot':
     case 'send':
     case 'start':
     case 'sysrq':
@@ -351,13 +387,17 @@ function addCommandOptions(command, opts, shorts)
     case 'lookup':
         opts.json = Boolean;
         shorts.j = ['--json'];
+        opts.output = String;
+        shorts.o = ['--output'];
         opts.unique = Boolean;
         shorts['1'] = ['--unique'];
         break;
     case 'create':
     case 'receive':
     case 'recv':
+    case 'reprovision':
     case 'update':
+    case 'validate':
         shorts.f = ['--file'];
         break;
     case 'list':
@@ -388,7 +428,7 @@ function getInfo(uuid, types, callback)
     VM.info(uuid, types, function (err, data) {
         if (err) {
             // Our error message here gets shown to the user.
-            callback(new Error('Unable to get VM info for ' + uuid
+            callback(new Error('Unable to get VM info for VM ' + uuid
                 + ': ' + err.message));
         } else {
             console.log(JSON.stringify(data, null, 2));
@@ -400,10 +440,16 @@ function getInfo(uuid, types, callback)
 function startVM(uuid, extra, callback)
 {
     VM.start(uuid, extra, function (err, result) {
+        var new_err;
+
         if (err) {
             // Our error message here gets shown to the user.
-            callback(new Error('Unable to start VM ' + uuid
-                + ': ' + err.message));
+            new_err = new Error('Unable to start VM ' + uuid
+                + ': ' + err.message);
+            if (err.hasOwnProperty('code')) {
+                new_err.code = err.code;
+            }
+            callback(new_err);
         } else {
             callback();
         }
@@ -575,11 +621,42 @@ function formatVMList(vmobjs, order, sortby, options, callback)
 
 function listVM(spec, order, sortby, options, callback)
 {
+    var fields;
+    var lookup_fields = [];
+
     if (!spec) {
         spec = {};
     }
 
-    VM.lookup(spec, {full: true, transform: addFakeFields},
+    fields = order.split(',');
+
+    // some fields are added by addFakeFields and not real lookup fields
+    // lookup will return these because of the transform we pass in, but
+    // we need to also add the stuff transform needs to get these.
+    if (fields.indexOf('type') !== -1) {
+        if (fields.indexOf('brand') === -1) {
+            fields.push('brand');
+        }
+    }
+    if (fields.indexOf('ram') !== -1) {
+        fields.push('max_physical_memory');
+    }
+
+    // not all fields we're passed as order are looked up directly. When you
+    // want nics.0.ip for example, we just request the whole .nics object.
+    fields.forEach(function (field) {
+        if (field.match(/\./)) {
+            if (lookup_fields.indexOf(field.split('.')[0]) === -1) {
+                lookup_fields.push(field.split('.')[0]);
+            }
+        } else {
+            if (lookup_fields.indexOf(field) === -1) {
+                lookup_fields.push(field);
+            }
+        }
+    });
+
+    VM.lookup(spec, {fields: lookup_fields, transform: addFakeFields},
         function (err, vmobjs) {
             if (err) {
                 callback(err);
@@ -607,8 +684,13 @@ function readFile(filename, callback)
                     + ' ' + JSON.stringify(err)));
             }
         } else {
-            payload = JSON.parse(data.toString());
-            callback(null, payload);
+            try {
+                payload = JSON.parse(data.toString());
+                callback(null, payload);
+            } catch (e) {
+                e.message = 'Invalid JSON payload: ' + e.message;
+                callback(e);
+            }
         }
     });
 }
@@ -620,12 +702,16 @@ function main(callback)
     var filename;
     var extra = {};
     var options = {};
+    var out_fields = [];
     var key;
     var knownOpts = {};
     var order;
+    var order_list;
     var parsed;
     var shortHands = {};
+    var snapname;
     var sortby;
+    var sortby_list;
     var type;
     var types;
     var uuid;
@@ -643,11 +729,8 @@ function main(callback)
 
     // console.log("parsed =\n"+ require("util").inspect(parsed));
 
-    if (parsed.debug) {
-        VM.loglevel = 'DEBUG';
-    } else {
-        VM.loglevel = 'INFO';
-    }
+    // always set log level to debug
+    VM.loglevel = 'debug';
 
     switch (command) {
     case 'start':
@@ -656,9 +739,15 @@ function main(callback)
         extra = parseStartArgs(parsed.argv.remain);
         startVM(uuid, extra, function (err) {
             if (err) {
-                callback(err);
+                // if the error was because zone is already running (returned by
+                // VM.start()), we'll treat as noop and exit 0.
+                if (err.code === 'EALREADYRUNNING') {
+                    callback(null, err.message);
+                } else {
+                    callback(err);
+                }
             } else {
-                callback(null, 'Successfully started ' + uuid);
+                callback(null, 'Successfully started VM ' + uuid);
             }
         });
         break;
@@ -666,6 +755,31 @@ function main(callback)
         uuid = getUUID(command, parsed);
         VM.console(uuid, function (err) {
             callback(err);
+        });
+        break;
+    case 'reprovision':
+        uuid = getUUID(command, parsed);
+        if (parsed.hasOwnProperty('file') && parsed.file !== '-') {
+            filename = parsed.file;
+        } else {
+            filename = '-';
+        }
+        if (filename === '-' && tty.isatty(0)) {
+            usage('Will not take payload from stdin when stdin is a tty.');
+        }
+        readFile(filename, function (err, payload) {
+            if (err) {
+                callback(err);
+                return;
+            }
+
+            VM.reprovision(uuid, payload, function (e) {
+                if (e) {
+                    callback(e);
+                } else {
+                    callback(null, 'Successfully reprovisioned VM ' + uuid);
+                }
+            });
         });
         break;
     case 'update':
@@ -682,7 +796,7 @@ function main(callback)
                 if (err) {
                     callback(err);
                 } else {
-                    callback(null, 'Successfully updated ' + uuid);
+                    callback(null, 'Successfully updated VM ' + uuid);
                 }
             });
         } else {
@@ -698,7 +812,7 @@ function main(callback)
                         if (e) {
                             callback(e);
                         } else {
-                            callback(null, 'Successfully updated ' + uuid);
+                            callback(null, 'Successfully updated VM ' + uuid);
                         }
                     });
                 }
@@ -712,7 +826,7 @@ function main(callback)
                 callback(err);
                 return;
             }
-            callback(null, 'Successfully installed ' + uuid);
+            callback(null, 'Successfully installed VM ' + uuid);
         });
         break;
     case 'recv':
@@ -721,7 +835,7 @@ function main(callback)
             if (e) {
                 callback(e);
             } else {
-                callback(null, 'Successfully received ' + info.uuid);
+                callback(null, 'Successfully received VM ' + info.uuid);
             }
         });
         break;
@@ -744,10 +858,58 @@ function main(callback)
                 if (e) {
                     callback(e);
                 } else {
-                    callback(null, 'Successfully created ' + info.uuid);
+                    callback(null, 'Successfully created VM ' + info.uuid);
                 }
             });
         });
+        break;
+    case 'create-snapshot':
+        uuid = getUUID(command, parsed);
+        if (!parsed.argv.remain || parsed.argv.remain.length !== 1) {
+            usage('Wrong number of parameters to "create-snapshot"');
+        } else {
+            snapname = parsed.argv.remain[0];
+            VM.create_snapshot(uuid, snapname, {}, function (err) {
+                if (err) {
+                    callback(err);
+                } else {
+                    callback(null, 'Created snapshot ' + snapname + ' for VM '
+                        + uuid);
+                }
+            });
+        }
+        break;
+    case 'delete-snapshot':
+        uuid = getUUID(command, parsed);
+        if (!parsed.argv.remain || parsed.argv.remain.length !== 1) {
+            usage('Wrong number of parameters to "delete-snapshot"');
+        } else {
+            snapname = parsed.argv.remain[0];
+            VM.delete_snapshot(uuid, snapname, {}, function (err) {
+                if (err) {
+                    callback(err);
+                } else {
+                    callback(null, 'Deleted snapshot ' + snapname + ' for VM '
+                        + uuid);
+                }
+            });
+        }
+        break;
+    case 'rollback-snapshot':
+        uuid = getUUID(command, parsed);
+        if (!parsed.argv.remain || parsed.argv.remain.length !== 1) {
+            usage('Wrong number of parameters to "rollback-snapshot"');
+        } else {
+            snapname = parsed.argv.remain[0];
+            VM.rollback_snapshot(uuid, snapname, {}, function (err) {
+                if (err) {
+                    callback(err);
+                } else {
+                    callback(null, 'Rolled back snapshot ' + snapname
+                        + ' for VM ' + uuid);
+                }
+            });
+        }
         break;
     case 'send':
         uuid = getUUID(command, parsed);
@@ -755,7 +917,7 @@ function main(callback)
             if (e) {
                 callback(e);
             } else {
-                callback(null, 'Successfully sent ' + uuid);
+                callback(null, 'Successfully sent VM ' + uuid);
             }
         });
         break;
@@ -764,10 +926,11 @@ function main(callback)
         uuid = getUUID(command, parsed);
         VM.delete(uuid, function (err) {
             if (err) {
-                err.message = 'Failed to delete ' + uuid + ': ' + err.message;
+                err.message = 'Failed to delete VM ' + uuid + ': '
+                    + err.message;
                 callback(err);
             } else {
-                callback(null, 'Successfully deleted ' + uuid);
+                callback(null, 'Successfully deleted VM ' + uuid);
             }
         });
         break;
@@ -788,15 +951,68 @@ function main(callback)
         types = parseInfoArgs(parsed.argv.remain);
         getInfo(uuid, types, callback);
         break;
+    case 'validate':
+        if (parsed.hasOwnProperty('file') && parsed.file !== '-') {
+            filename = parsed.file;
+        } else {
+            filename = '-';
+        }
+        if (filename === '-' && tty.isatty(0)) {
+            usage('Will not ' + command + ' from stdin when stdin is a '
+                + 'tty.');
+        }
+        if (!parsed.argv.remain || parsed.argv.remain.length < 1) {
+            usage('Will not ' + command + ' without a valid action.');
+        }
+        if (parsed.argv.remain[0] === 'update'
+            && parsed.argv.remain.length !== 2) {
+
+            usage('Will not ' + command + ' without a valid action and brand.');
+        }
+        readFile(filename, function (err, payload) {
+            var brand;
+            var action = parsed.argv.remain[0];
+
+            if (err) {
+                callback(err);
+                return;
+            }
+
+            if (action === 'update') {
+                brand = parsed.argv.remain[1];
+            } else {
+                brand = payload.brand;
+            }
+
+            VM.validate(brand, action, payload, function (e) {
+                if (e) {
+                    callback(new Error(JSON.stringify(e, null, 2)));
+                } else {
+                    callback(null, 'VALID \'' + action
+                        + '\' payload for ' + brand + ' brand VMs.');
+                }
+            });
+        });
+        break;
     case 'help':
         usage(null, 0);
         break;
     case 'lookup':
         extra = parseKeyEqualsValue(parsed.argv.remain);
         options = {transform: addFakeFields};
+
         if (parsed.json) {
-            options.full = true;
+            if (parsed.hasOwnProperty('output')) {
+                out_fields = parsed.output.split(',');
+                options.fields = out_fields;
+            } else {
+                options.full = true;
+            }
+        } else if (parsed.hasOwnProperty('output')) {
+            callback(new Error('Cannot specify -o without -j'));
+            return;
         }
+
         for (key in extra) {
             if (!validFilterKey(key)) {
                 callback(new Error('Invalid lookup key: "' + key + '"'));
@@ -806,6 +1022,7 @@ function main(callback)
 
         VM.lookup(extra, options, function (err, results) {
             var m;
+
             if (err) {
                 callback(err);
             } else if (parsed.unique && results.length !== 1) {
@@ -814,6 +1031,8 @@ function main(callback)
             } else if (parsed.json) {
                 console.log(JSON.stringify(results, null, 2));
             } else {
+                // Here we're just looking for the list, results is an array
+                // of uuids.
                 for (m in results) {
                     m = results[m];
                     console.log(m);
@@ -834,7 +1053,7 @@ function main(callback)
                     if (err) {
                         callback(err);
                     } else {
-                        callback(null, 'Sent ' + type + ' sysrq to ' + uuid);
+                        callback(null, 'Sent ' + type + ' sysrq to VM ' + uuid);
                     }
                 });
             }
@@ -867,6 +1086,24 @@ function main(callback)
             }
         }
 
+        order_list = order.split(',');
+        for (key in order_list) {
+            if (!validColumnKey(order_list[key])) {
+                callback(new Error('Invalid order key: "' + order_list[key]
+                    + '"'));
+                return;
+            }
+        }
+
+        sortby_list = sortby.split(',');
+        for (key in sortby_list) {
+            if (!validColumnKey(sortby_list[key])) {
+                callback(new Error('Invalid sort key: "' + sortby_list[key]
+                    + '"'));
+                return;
+            }
+        }
+
         listVM(extra, order, sortby, options, callback);
         break;
     case 'halt':
@@ -880,9 +1117,15 @@ function main(callback)
         }
         VM[command](uuid, extra, function (err) {
             if (err) {
-                callback(err);
+                // if the error was because zone is not running (returned by
+                // VM.stop()), we'll treat as noop and exit 0.
+                if (err.code === 'ENOTRUNNING') {
+                    callback(null, err.message);
+                } else {
+                    callback(err);
+                }
             } else {
-                callback(null, 'Succesfully completed ' + command + ' for '
+                callback(null, 'Successfully completed ' + command + ' for VM '
                     + uuid);
             }
         });
@@ -893,19 +1136,73 @@ function main(callback)
     }
 }
 
+function flushLogs(callback)
+{
+    var streams;
+
+    if (!VM.log) {
+        fwLog.flush(callback);
+        return;
+    }
+
+    streams = VM.log.streams;
+    async.forEachSeries(streams, function (str, cb) {
+        var called_back = false;
+
+        if (!str || !str.stream) {
+            cb();
+            return;
+        }
+
+        str.stream.once('drain', function () {
+            if (!called_back) {
+                called_back = true;
+                cb();
+            }
+        });
+
+        if (str.stream.write('')) {
+            // according to node docs true here means we're done
+            if (!called_back) {
+                called_back = true;
+                cb();
+            }
+        } else {
+            // false means: wait for 'drain' to call cb();
+            /*jsl:pass*/
+        }
+        return;
+    }, function () {
+        fwLog.flush(callback);
+        return;
+    });
+}
+
 onlyif.rootInSmartosGlobal(function (err) {
     if (err) {
         console.error('FATAL: cannot run because: ' + err);
         process.exit(2);
+        return;
     }
+
+    panic.enablePanicOnCrash({
+        'skipDump': true,
+        'abortOnPanic': true
+    });
+
     main(function (e, message) {
         if (e) {
             console.error(e.message);
-            process.exit(1);
+            flushLogs(function () {
+                process.exit(1);
+            });
+        } else {
+            if (message) {
+                console.error(message);
+            }
+            flushLogs(function () {
+                process.exit(0);
+            });
         }
-        if (message) {
-            console.error(message);
-        }
-        process.exit(0);
     });
 });

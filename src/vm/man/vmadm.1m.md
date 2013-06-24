@@ -30,6 +30,23 @@ tab-complete UUIDs rather than having to type them out for every command.
         See the 'PROPERTIES' or 'EXAMPLES' sections below for details on what
         to put in the JSON payload.
 
+      create-snapshot <uuid> <snapname>
+
+        Support for snapshots is currently experimental. It only works for OS
+        VMS which also have no additional datasets.
+
+        The <snapname> parameter specifies the name of the snapshot to take
+        of the specified VM. The snapname must be 64 characters or less and
+        must only contain alphanumeric characters and characters in the set
+        [-_.:%] to comply with ZFS restrictions.
+
+        You can use delete-snapshot or rollback-snapshot in the future on a
+        snapshot you've created with create-snapshot, so long as that snapshot
+        still exists.
+
+        See the 'SNAPSHOTS' section below for some more details on how to use
+        these snapshots, and their restrictions.
+
       console <uuid>
 
         Connect to the text console for a running VM. For OS VMs, this will be
@@ -49,6 +66,19 @@ tab-complete UUIDs rather than having to type them out for every command.
 
         Note: this command is not interactive, take care to delete the right
         VM.
+
+      delete-snapshot <uuid> <snapname>
+
+        Support for snapshots is currently experimental. It only works for OS
+        VMS which also have no additional datasets.
+
+        This command deletes the ZFS snapshot that exists with the name
+        <snapname> from the VM with the specified uuid. You cannot undo this
+        operation and it will no longer be possible to rollback to the specified
+        snapshot.
+
+        See the 'SNAPSHOTS' section below for some more details on how to use
+        these snapshots, and their restrictions.
 
       get <uuid>
 
@@ -143,7 +173,7 @@ tab-complete UUIDs rather than having to type them out for every command.
         You can see several examples using order, sort and selection in the
         EXAMPLES section below.
 
-      lookup [-j|-1] [field=value ...]
+      lookup [-j|-1] [-o field,field,..] [field=value ...]
 
         The lookup command is designed to help you find VMs. It takes a set of
         filter options in the same format as the list command. This means you
@@ -163,6 +193,18 @@ tab-complete UUIDs rather than having to type them out for every command.
         the -j parameter. With that flag set, the output will be a JSON array
         of VM objects containing the same JSON data as the 'get' command for
         each VM matched.
+
+        When the -j flag is passed, you can also limit the fields in the objects
+        of the output array. To do so, use the -o option. For example if you
+        use:
+
+            vmadm lookup -j -o uuid,brand,quota
+
+        the objects in the output array will only have the uuid, brand and quota
+        members. Where possible vmadm optimizes the lookups such that not
+        including fields in the output means it won't have to do the potentially
+        expensive operations to look them up. By default (without -o) all fields
+        are included in the objects.
 
         If you pass the -1 parameter, lookup should only return 1 result. If
         multiple results are matched or 0 results are matched, an error will
@@ -189,6 +231,26 @@ tab-complete UUIDs rather than having to type them out for every command.
         reboot you can add the '-F' parameter to do a forced reboot. This
         reboot will be much faster but will not necessarily give the VM any
         time to shut down its processes.
+
+      rollback-snapshot <uuid> <snapname>
+
+        Support for snapshots is currently experimental. It only works for OS
+        VMS which also have no additional datasets.
+
+        This command rolls the dataset backing the the VM with the specified
+        uuid back to its state at the point when the snapshot with snapname was
+        taken. You cannot undo this except by rolling back to an even older
+        snapshot if one exists.
+
+        IMPORTANT: when you rollback to a snapshot, all other snapshots newer
+        than the one you're rolling back to will be deleted. It will no longer
+        be possible to rollback to a snapshot newer than <snapname> for this VM.
+        Also note: your VM will be stopped if it is running when you start a
+        rollback-snapshot and will be booted after the snapshot has been
+        restored.
+
+        See the 'SNAPSHOTS' section below for some more details on how to use
+        these snapshots, and their restrictions.
 
       start <uuid> [option=value ...]
 
@@ -294,12 +356,15 @@ tab-complete UUIDs rather than having to type them out for every command.
         If you pass in a JSON object, that object should be formatted in the
         same manner as a create payload. The only exception is with fields
         that are themselves objects: VM NICs, KVM VM disks, customer_metadata,
-        internal_metadata, tags.  In the the case of the "simple" properties
-        'tags', 'customer_metadata' and 'internal_metadata' which are key-value
-        pairs, there are 2 special payload members:
+        internal_metadata, tags and routes.  In the the case of the "simple"
+        properties 'tags', 'customer_metadata', 'internal_metadata' and
+        'routes' which are key-value pairs, there are 2 special payload members:
 
-          set_tags || set_customer_metadata || set_internal_metadata
-          remove_tags || remove_customer_metadata || remove_internal_metadata
+          set_tags || set_customer_metadata
+          || set_internal_metadata || set_routes
+
+          remove_tags || remove_customer_metadata ||
+          remove_internal_metadata || remove_routes
 
         which can add/update or remove entries from key/value sets. To add an
         entry, include it in the set_X object with a simple string value. To
@@ -317,7 +382,8 @@ tab-complete UUIDs rather than having to type them out for every command.
 
           {"remove_tags": ["hello"]}
 
-        The same pattern is used for customer_metadata and internal_metadata.
+        The same pattern is used for customer_metadata, internal_metadata and
+        routes.
 
         In the case of nics and disks, there are 3 special objects:
 
@@ -344,6 +410,72 @@ tab-complete UUIDs rather than having to type them out for every command.
         the change takes effect immediately for the VM without the VM being
         restarted. Other properties will require a reboot in order to take
         effect.
+
+     validate create [-f <filename>]
+     validate update <brand> [-f <filename>]
+
+       This command allows you to validate your JSON payloads before calling
+       create or update.  You must specify the action for which your payload is
+       intended (create or update) as the validation rules are different.  In
+       addition, when validating an update payload, you must pass the brand
+       parameter as validation rules vary based on brand.
+
+       If no -f <filename> is specified the payload is expected to be passed
+       on stdin.  If -f <filename> is specfied, the payload to validate will
+       be read from the file with that name.  Output from this command in the
+       case the payload is valid will be something like:
+
+         "VALID create payload for joyent brand VMs."
+
+       and the exit code will be 0.  When the payload is not valid the exit code
+       will be 1 and you will get back a json object which will have at least
+       one of the following members:
+
+         'bad_brand'
+
+            The brand argument you passed to validate is invalid.
+
+         'bad_properties'
+
+           This is an array of payload properties which are not valid for the
+           specified action.
+
+         'bad_values'
+
+           This is an array of payload properties which had unacceptable values.
+
+         'missing_properties'
+
+           This is an array of the payload properties which are required for the
+           given action but are missing from the specified payload.
+
+       consult the PROPERTIES section below for help correcting errors in your
+       payload.
+
+
+## SNAPSHOTS
+
+    Snapshots are currently only implemented for OS VMs, and only for those
+    that do not utilize delegated datasets or any other datasets other than
+    the zoneroot dataset.
+
+    When you create a snapshot with create-snapshot, it will create a ZFS
+    snapshot of that dataset with the name dataset@vmsnap-<snapname> and the
+    .snapshots member of VM objects returned by things like vmadm get will
+    only include those snapshots that have been created using this pattern.
+
+    That allows vmadm to distinguish between snapshots it has taken and
+    snapshots that could have been taken using other tools.
+
+    To delete a snapshot you can use the delete-snapshot command. That will
+    destroy the snapshot in ZFS and it will automatically be removed from the
+    machine's snapshot list. It will no longer be possible to rollback to it.
+
+    To rollback a VM to its state at the time of a previous snapshot, you can
+    use the rollback-snapshot command. This will stop the VM rollback the
+    zoneroot dataset to the specified snapshot and start the VM again.
+    IMPORTANT: rollback-snapshot will automatically delete all snapshots newer
+    than the one you're rolling back to. This cannot be undone.
 
 ## PROPERTIES
 
@@ -424,11 +556,11 @@ tab-complete UUIDs rather than having to type them out for every command.
 
     brand:
 
-        This will be one of 'joyent' or 'joyent-minimal' for OS virtualization
-        and 'kvm' for full hardware virtualization. This is a required value
-        for VM creation.
+        This will be one of 'joyent', 'joyent-minimal' or 'sngl' for OS
+        virtualization and 'kvm' for full hardware virtualization. This is a
+        required value for VM creation.
 
-        type: string (joyent|joyent-minimal|kvm)
+        type: string (joyent|joyent-minimal|kvm|sngl)
         vmtype: OS,KVM
         listable: yes
         create: yes
@@ -504,6 +636,9 @@ tab-complete UUIDs rather than having to type them out for every command.
         This field allows metadata to be set and associated with this VM. The
         value should be an object with only top-level key=value pairs.
 
+        NOTE: for historical reasons, do not put keys in here that match the
+        pattern *_pw. Those keys should go in internal_metadata instead.
+
         type: JSON Object (key: value)
         vmtype: OS,KVM
         listable: no
@@ -542,8 +677,14 @@ tab-complete UUIDs rather than having to type them out for every command.
     delegate_dataset:
 
         This property indicates whether we should delegate a ZFS dataset to an
-        OS VM. If true, the VM will get a dataset /data which it will be able
-        to manage.
+        OS VM. If true, the VM will get a dataset <zoneroot dataset>/data (by
+        default: zones/<uuid>/data) added to it. This dataset will be also be
+        mounted on /<zoneroot dataset>/data inside the zone (again by default:
+        /zones/<uuid>/data) but you can change this by setting the mountpoint
+        option on the dataset from within the zone with zfs(1M). When using
+        this option, sub-datasets can be created, snapshots can be taken and
+        many other options can be performed on this dataset from within the
+        VM.
 
         type: boolean
         vmtype: OS
@@ -624,18 +765,25 @@ tab-complete UUIDs rather than having to type them out for every command.
 
     disks.*.image_size:
 
-        The size of the image from which we will create this disk.
+        The size of the image from which we will create this disk. When neither
+        size nor image_size is passed for a disk but an image_uuid is, and that
+        image is available through imgadm, the image_size value from the
+        manifest will be set as image_size.
+
+        Important: image_size is required (unless you rely on imgadm) when you
+        include image_uuid for a disk and not allowed when you don't.
 
         type: integer (size in MiB)
         vmtype: KVM
         listable: yes (see above)
         create: yes
         update: yes (special, see description in 'update' section above)
-        default: no
+        default: no (loaded from imgadm if possible)
 
     disks.*.image_uuid:
 
-        UUID of dataset from which to clone this VM's disk.
+        UUID of dataset from which to clone this VM's disk. Note: this image's
+        UUID must show up in the 'imgadm list' output in order to be valid.
 
         type: string (UUID)
         vmtype: KVM
@@ -650,6 +798,9 @@ tab-complete UUIDs rather than having to type them out for every command.
         not included the image_* parameters. It will show up in get requests
         for all disks whether you've specified or not as a means to determine
         the size of the zvol.
+
+        Important: size is required when you don't include image_uuid for a disk
+        and not allowed when you do.
 
         type: integer (size in MiB)
         vmtype: KVM
@@ -667,7 +818,7 @@ tab-complete UUIDs rather than having to type them out for every command.
         listable: yes (see above)
         create: yes
         update: yes (special, see description in 'update' section above)
-        default: no
+        default: disk
 
     disks.*.model:
 
@@ -811,6 +962,20 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: no
 
+    firewall_enabled:
+
+        This enables the firewall for this VM, allowing firewall rules set
+        by fwadm(1m) to be applied.
+
+        Note: this property will only show up in a 'vmadm get' when it's set
+        true. When set false the property will not appear.
+
+        type: boolean
+        vmtype: OS,KVM
+        listable: no
+        create: yes
+        update: yes
+
     fs_allowed:
 
         This option allows you to specify filesystem types this zone is allowed
@@ -843,6 +1008,13 @@ tab-complete UUIDs rather than having to type them out for every command.
         value should be an object with only top-level key=value pairs. The
         intention is that customer_metadata contain customer modifiable keys
         whereas internal_metadata is for operator generated keys.
+
+        NOTE: for historical reasons, when a user in a zone does:
+
+            mdata-get name_pw
+
+        where the key ends with '_pw', the key is looked up in internal_metadata
+        instead of customer_metadata.
 
         type: JSON Object (key: value)
         vmtype: OS,KVM
@@ -904,14 +1076,30 @@ tab-complete UUIDs rather than having to type them out for every command.
     max_swap:
 
         The maximum amount of virtual memory the VM is allowed to use.  This
-        cannot be lower than max_physical_memory.
+        cannot be lower than max_physical_memory, nor can it be lower than 256.
 
         type: integer (number of MiB)
         vmtype: OS,KVM
         listable: yes
         create: yes
         update: yes (live update)
-        default: value of max_physical_memory
+        default: value of max_physical_memory or 256, whichever is higher.
+
+    mdata_exec_timeout:
+
+        For OS VMs this parameter adjusts the timeout on the start method of
+        the svc:/smartdc/mdata:execute service running in the zone. This is the
+        service which runs user-script scripts.
+
+        This parameter only makes sense when creating a VM and is ignored
+        in other cases.
+
+        type: integer (0 for unlimited, >0 number of seconds)
+        vmtype: OS
+        listable: no
+        create: yes
+        update: no
+        default: 300
 
     nics:
 
@@ -1077,6 +1265,16 @@ tab-complete UUIDs rather than having to type them out for every command.
         The netmask for this NIC's network (not required if using DHCP)
 
         type: string (IPv4 netmask, eg. 255.255.255.0)
+        vmtype: OS,KVM
+        listable: yes (see above)
+        create: yes
+        update: yes
+
+    nics.*.network_uuid
+
+        UUID for allowing nics to be tracked in an external system
+
+        type: string (UUID)
         vmtype: OS,KVM
         listable: yes (see above)
         create: yes
@@ -1274,15 +1472,51 @@ tab-complete UUIDs rather than having to type them out for every command.
 
     resolvers:
 
-        For OS VMs, this value sets the initial resolvers which get put into
-        the config files on first boot. For KVM VMs these will get passed as
-        the resolvers with DHCP responses.
+        For OS VMs, this value sets the resolvers which get put into
+        /etc/resolv.conf. For KVM VMs these will get passed as the resolvers
+        with DHCP responses.
 
         type: array
         vmtype: OS,KVM
         listable: no
         create: yes
-        update: yes (but unused after create for OS VMs)
+        update: yes
+
+    routes:
+
+        This is a key-value object that maps destinations to gateways. These
+        will be set as static routes in the VM. The destinations can be either
+        IPs or subnets in CIDR form. The gateways can either be IP addresses, or
+        can be of the form "nics[0]", which specifies a link-local route on the
+        numbered nic in that VM's nics array (the first nic is 0).  As an
+        example:
+
+            {
+                "10.2.2.0/24": "10.2.1.1",
+                "10.3.0.1": "nics[1]"
+            }
+
+        This sets two static routes: to the 10.2.2.0/24 subnet with a gateway
+        of 10.2.1.1, and a link-local route to the host 10.3.0.1 over the VM's
+        second nic.
+
+        type: object
+        vmtype: OS
+        listable: no
+        create: yes
+        update: yes
+
+    snapshots (EXPERIMENTAL):
+
+        For OS VMs, this will display a list of snapshots from which you can
+        restore the root dataset for your VM.  Currently this is only supported
+        when your VM does not have any delegated datasets.
+
+        type: array
+        vmtype: OS
+        listable: no
+        create: no (but you can use create-snapshot)
+        update: no (but you can use rollback-snapshot and delete-snapshot)
 
     spice_opts (EXPERIMENTAL):
 
@@ -1351,7 +1585,7 @@ tab-complete UUIDs rather than having to type them out for every command.
         listable: yes
         create: yes
         update: yes
-        default: 256
+        default: max_swap
 
     transition_expire:
 
@@ -1373,9 +1607,11 @@ tab-complete UUIDs rather than having to type them out for every command.
         When a KVM VM is in transition from running to either 'off' (in the
         case of stop) or 'start' (in the case of reboot), the transition_to
         field will be set to indicate which state the VM is transitioning to.
+        Additionally when a VM is provisioning you may see this with a value
+        of 'running'.
 
-        type: string value, one of: ['stopped', 'start']
-        vmtype: KVM
+        type: string value, one of: ['stopped', 'start', 'running']
+        vmtype: OS,KVM
         listable: no
         create: no
         update: no
@@ -1383,7 +1619,7 @@ tab-complete UUIDs rather than having to type them out for every command.
     type:
 
         This is a virtual field and cannot be updated. It will be 'OS' when the
-        brand=='joyent*' and 'KVM' when the brand=='kvm'.
+        (brand == 'joyent*' || brand == 'sngl') and 'KVM' when the brand=='kvm'.
 
         type: string value, one of: ['OS', 'KVM']
         vmtype: OS,KVM
@@ -1419,15 +1655,15 @@ tab-complete UUIDs rather than having to type them out for every command.
     vga:
 
         This property allows one to specify the VGA emulation to be used by
-        KVM VMs. The default is 'cirrus'. NOTE: with the Qemu bundled in
-        SmartOS qxl and xenfb do not work.
+        KVM VMs. The default is 'std'. NOTE: with the Qemu bundled in SmartOS
+        qxl and xenfb do not work.
 
         type: string (one of: 'cirrus','std','vmware','qxl','xenfb')
         vmtype: KVM
         listable: no
         create: yes
         update: yes
-        default: 'cirrus'
+        default: 'std'
 
     virtio_txburst:
 

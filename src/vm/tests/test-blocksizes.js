@@ -14,22 +14,11 @@ var abort = false;
 var bundle_filename;
 var vmobj;
 
-var image_uuid = vmtest.CURRENT_SMARTOS;
-var vm_image_uuid = vmtest.CURRENT_UBUNTU;
+var image_uuid = vmtest.CURRENT_SMARTOS_UUID;
+var vm_image_uuid = vmtest.CURRENT_UBUNTU_UUID;
 
-test('import joyent image', {'timeout': 360000}, function(t) {
-    vmtest.ensureImage(t, '/zones/' + image_uuid, image_uuid, function (err) {
-        t.ok(!err, "joyent image exists");
-        t.end();
-    });
-});
-
-test('import ubuntu image', {'timeout': 360000}, function(t) {
-    vmtest.ensureImage(t, '/dev/zvol/rdsk/zones/' + vm_image_uuid, vm_image_uuid, function (err) {
-        t.ok(!err, "ubuntu image exists");
-        t.end();
-    });
-});
+// This will ensure vmtest.CURRENT_* are installed
+vmtest.ensureCurrentImages();
 
 test('create zone with root_recsize 64k', {'timeout': 240000}, function(t) {
     var payload = {
@@ -75,6 +64,12 @@ function testInvalidRootRecsize(t, size, vmobj, callback)
     };
     var prev_size = vmobj.zfs_root_recsize;
 
+    if (abort) {
+        t.ok(false, 'skipping update as test run is aborted.');
+        callback();
+        return;
+    }
+
     VM.update(vmobj.uuid, payload, function (e) {
         // we expect this to fail
         if (e) {
@@ -103,6 +98,12 @@ function testValidRootRecsize(t, size, vmobj, callback)
         'zfs_root_recsize': size
     };
     var prev_size = vmobj.zfs_root_recsize;
+
+    if (abort) {
+        t.ok(false, 'skipping update as test run is aborted.');
+        callback();
+        return;
+    }
 
     VM.update(vmobj.uuid, payload, function (e) {
         // we expect this to succeed
@@ -281,6 +282,12 @@ function testInvalidDataRecsize(t, size, vmobj, callback)
     };
     var prev_size = vmobj.zfs_data_recsize;
 
+    if (abort) {
+        t.ok(false, 'skipping send as test run is aborted.');
+        callback();
+        return;
+    }
+
     VM.update(vmobj.uuid, payload, function (e) {
         // we expect this to fail
         if (e) {
@@ -309,6 +316,12 @@ function testValidDataRecsize(t, size, vmobj, callback)
         'zfs_data_recsize': size
     };
     var prev_size = vmobj.zfs_data_recsize;
+
+    if (abort) {
+        t.ok(false, 'skipping send as test run is aborted.');
+        callback();
+        return;
+    }
 
     VM.update(vmobj.uuid, payload, function (e) {
         // we expect this to succeed
@@ -483,6 +496,12 @@ test('update zone with compression off', {'timeout': 240000}, function(t) {
         'zfs_root_compression': 'off'
     };
 
+    if (abort) {
+        t.ok(false, 'skipping send as test run is aborted.');
+        t.end();
+        return;
+    }
+
     VM.update(vmobj.uuid, payload, function (e) {
         if (e) {
             t.ok(false, 'failed to update: ' + e.message);
@@ -511,6 +530,12 @@ test('update zone with compression gzip-2 for data', {'timeout': 240000}, functi
     var payload = {
         'zfs_data_compression': 'gzip-2'
     };
+
+    if (abort) {
+        t.ok(false, 'skipping send as test run is aborted.');
+        t.end();
+        return;
+    }
 
     VM.update(vmobj.uuid, payload, function (e) {
         if (e) {
@@ -606,6 +631,12 @@ function testAddDiskInvalidBlockSize(t, size, vmobj, callback)
         'add_disks': [{'size': size, 'model': 'virtio', 'block_size': size}]
     };
     var prev_count = vmobj.disks.length;
+
+    if (abort) {
+        t.ok(false, 'skipping send as test run is aborted.');
+        callback();
+        return;
+    }
 
     VM.update(vmobj.uuid, payload, function (e) {
         // we expect this to fail
@@ -739,6 +770,12 @@ test('update kvm with compression off', {'timeout': 240000}, function(t) {
             {'path': vmobj.disks[0].path, 'compression': 'off'}
         ]
     };
+
+    if (abort) {
+        t.ok(false, 'skipping send as test run is aborted.');
+        t.end();
+        return;
+    }
 
     VM.update(vmobj.uuid, payload, function (e) {
         if (e) {

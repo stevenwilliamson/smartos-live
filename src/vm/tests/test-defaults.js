@@ -10,13 +10,14 @@ var vmtest = require('../common/vmtest.js');
 
 VM.loglevel = 'DEBUG';
 
-var image_uuid = vmtest.CURRENT_SMARTOS;
+var image_uuid = vmtest.CURRENT_SMARTOS_UUID;
 
 // Format:
 // 1. property of the vmobj
 // 2. expected value (or parameter to transform function)
 // 3. transform function (optional)
 var zone_defaults = {
+    'v': [1],
     'zonename': ['uuid', state_property],
     'autoboot': [true],
     'zonepath': ['uuid', prefix_zones_slash],
@@ -35,6 +36,7 @@ var zone_defaults = {
     'image_uuid': [image_uuid],
     'zfs_filesystem': ['uuid', prefix_zones],
     'zfs_root_recsize': [131072],
+    'snapshots': ['<EMPTY-ARRAY>'],
     'owner_uuid': ['00000000-0000-0000-0000-000000000000'],
     'uuid': ['uuid', state_property],
     'dns_domain': ['local'],
@@ -44,7 +46,9 @@ var zone_defaults = {
     'datacenter_name': ['<OPTIONAL-NON-EMPTY>'],
     'headnode_id': ['<OPTIONAL-NON-EMPTY>'],
     'create_timestamp': ['<NON-EMPTY>'],
+    'resolvers': ['<EMPTY-ARRAY>'],
     'nics': ['<EMPTY-ARRAY>'],
+    'routes': ['<EMPTY-OBJ>'],
     'tags': ['<EMPTY-OBJ>'],
     'customer_metadata': ['<EMPTY-OBJ>'],
     'internal_metadata': ['<EMPTY-OBJ>']

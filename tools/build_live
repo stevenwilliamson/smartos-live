@@ -21,7 +21,7 @@
 #
 
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
-# Copyright (c) 2012 Joyent, Inc.  All rights reserved.
+# Copyright (c) 2013 Joyent, Inc.  All rights reserved.
 # Use is subject to license terms.
 
 ROOT=`pwd`
@@ -31,7 +31,7 @@ SMF_SEEDS=${ROOT}/tools/build_seeds
 BUILDER=${ROOT}/tools/builder/builder
 SCANNER=${ROOT}/tools/scanner
 PWGEN=${ROOT}/tools/pwgen
-GET_STATUS=${ROOT}/tools/get_status
+GET_STATUS=${ROOT}/tools/build_etcrelease
 CHECK_DIR="${ROOT}/tools/checks"
 
 BUILDSTAMP=$(cat ${ROOT}/proto/buildstamp)
@@ -44,7 +44,7 @@ ERROR=0
 PLATFORM=i86pc
 ISA=i386
 ARCH64=amd64
-RSIZE=272000
+RSIZE=258000
 USIZE=390000
 KERNEL_64=platform/$PLATFORM/kernel/$ARCH64/unix
 if [[ -f ${ROOT}/configure-buildver ]]; then
@@ -150,7 +150,7 @@ function create_ufs
     lofiusrdev=$3
     usrfile=$4
 
-    newfs -o space -m 0 -i 50000 -b 4096 ${lofidev} < /dev/null 2> /dev/null
+    newfs -o space -m 0 -i 12248 -b 4096 ${lofidev} < /dev/null 2> /dev/null
     mkdir "${rdmnt}"
     mount -F ufs -o nologging ${lofidev} "${rdmnt}"
 
@@ -331,6 +331,8 @@ lofiadm -d "$lofidev32" 2>/dev/null
 
 if [ $ERROR -eq 0 ]; then
     chmod 0644 ${OUT_DIR}/${BOOT_ARCHIVE_64}
+    digest -a sha1 ${OUT_DIR}/${BOOT_ARCHIVE_64} \
+      > ${OUT_DIR}/${BOOT_ARCHIVE_64}.hash
     echo "${BUILDSTAMP}" > ${OUT_DIR}/buildstamp
     (cd ${OUT_DIR} && gtar -zcf ${PREFIX}.tgz ${PREFIX})
 fi

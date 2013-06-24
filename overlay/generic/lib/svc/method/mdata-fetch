@@ -21,8 +21,10 @@
 #
 # CDDL HEADER END
 #
-# Copyright (c) 2012, Joyent, Inc. All rights reserved.
+# Copyright (c) 2013, Joyent, Inc. All rights reserved.
 #
+
+export PS4='[\D{%FT%TZ}] ${BASH_SOURCE}:${LINENO}: ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 set -o xtrace
 
@@ -34,21 +36,25 @@ if [ ! -x /usr/sbin/mdata-get ]; then
   exit ${SMF_EXIT_ERR_FATAL}
 fi
 
-timer=30
+# For old zones that were created prior to OS-2253 and bumping the mdata:fetch
+# start timeout, we need to fix this otherwise we could timeout waiting for the
+# socket.
+cur_timeout=$(svcprop -p start/timeout_seconds svc:/smartdc/mdata:fetch)
+if [[ -z ${cur_timeout} || ${cur_timeout} -lt 1800 ]]; then
+    # The current manifest has an old timeout value, fix in case we timeout
+    # here.  XXX we can still hit OS-2296 here where smf will forget that we
+    # set this.
+    svccfg -s svc:/smartdc/mdata:fetch 'setprop start/timeout_seconds = 1800'
+    svcadm refresh svc:/smartdc/mdata:fetch
+fi
 
-while [ $((timer--)) -gt 0 ]; do
-  if [ -e /var/run/smartdc/metadata.sock ]; then break; fi
+# This waits until /.zonecontrol/metadata.sock exists then exits 0
+/usr/vm/sbin/filewait /.zonecontrol/metadata.sock
 
-  # This is an alternate signal to metadata which we enable if the socket isn't
-  # here yet in case something else in smf is messed up. (for debugging)
-  [[ -e /tmp/.ready_for_metadata ]] || touch /tmp/.ready_for_metadata
-
-  sleep 1
-done
-
-if [ ! -e /var/run/smartdc/metadata.sock ]; then
-  echo "No metadata socket file, skipping metadata loading."
-  exit ${SMF_EXIT_OK}
+if [[ ! -e /.zonecontrol/metadata.sock ]]; then
+    # this is a bug since filewait should not have returned until file existed.
+    echo "missing /.zonecontrol/metadata.sock, Unable to start mdata:fetch"
+    exit ${SMF_EXIT_ERR_FATAL}
 fi
 
 # Update sysinfo to ensure values that come from metadata are populated.
@@ -78,11 +84,9 @@ case $? in
     echo "Metadata user-script successfuly retrieved."
     mv /var/svc/mdata-user-script{.new,}
     chmod +x /var/svc/mdata-user-script
-    svcadm enable smartdc/mdata:execute
     ;;
   1)
     echo "Metadata user-script not defined."
-    svcadm disable -s smartdc/mdata:execute
     rm -f /var/svc/mdata-user-script{,.new}
     ;;
   *)
@@ -90,5 +94,167 @@ case $? in
     exit ${SMF_EXIT_ERR_FATAL}
     ;;
 esac
+
+echo "Retrieving tmpfs value..."
+tmpfs=$(/usr/sbin/mdata-get sdc:tmpfs)
+if [[ $? == 0 && -n ${tmpfs} && -f /etc/vfstab ]]; then
+  check="swap        -   /tmp                tmpfs";
+  new="swap        -   /tmp                tmpfs    -   yes    size=${tmpfs}m";
+  if ! /usr/bin/grep "^${new}" /etc/vfstab; then
+    if ! /usr/bin/grep "^${check}" /etc/vfstab; then
+      # no tmpfs line. add it.
+      echo "${new}" >> /etc/vfstab
+    else
+      # existing tmpfs line, but wrong value. fix it.
+      /usr/bin/sed -i "" -e "s|^swap.*/tmp.*tmpfs.*$|${new}|" /etc/vfstab
+      echo $?
+    fi
+    # also fix current size, since /etc/vfstab didn't have our correct line
+    /usr/sbin/mount -F tmpfs -o remount,size=${tmpfs}m /tmp
+  fi
+fi
+
+# We use the special sdc:nics value here though this is not an interface for
+# use elsewhere.  If this is changed please also update agent.js in the metadata
+# agent.
+#
+# We run this every startup in case nics have changed since last boot. As
+# network/physical has an optional_all dependency on this service, we'll have
+# had our chance to write these files out before networking comes up. This
+# might eventually be replaced by network/physical grabbing data directly.
+echo "Retrieving nics data..."
+while IFS="|" read -r iface ip netmask primary gateway; do
+
+  # so it shows up in the logs
+  echo "iface[${iface}] ip[${ip}] netmask[${netmask}]" \
+    "primary[${primary}] gateway[${gateway}]"
+
+  # if we don't have interface name, we don't know what files to write out.
+  if [[ -z ${iface} ]]; then
+    continue;
+  fi
+
+  if [[ ${ip} != "dhcp" && -n ${ip} && -n ${netmask} ]]; then
+    echo "${ip} netmask ${netmask} up" > /etc/hostname.${iface}
+  else
+    rm -f /etc/hostname.${iface}
+  fi
+
+  # remove any existing dhcp.${iface} file, we'll create one if it belongs later
+  rm -f /etc/dhcp.${iface}
+
+  if [[ -n ${primary} && ${primary} == "true" ]]; then
+    if [[ -n ${gateway} ]]; then
+      echo "${gateway}" > /etc/defaultrouter
+    fi
+    if [[ ${ip} == "dhcp" ]]; then
+      touch /etc/dhcp.${iface}
+    fi
+  fi
+
+  # XXX we leave old hostname.netX files around and just replace when we have
+  # one next.
+
+done < <(/usr/sbin/mdata-get sdc:nics \
+    | /usr/bin/json -d '|' -a interface ip netmask primary gateway)
+
+# rebuild resolv.conf
+resolvers=$(mdata-get sdc:resolvers)
+result=$?
+if [[ ${result} == 0 ]]; then
+
+    # if dns_domain is missing or broken, we still write out, just w/o search
+    search="search $(mdata-get sdc:dns_domain)"
+    if [[ $? != 0 ]]; then
+        search=
+    fi
+
+    if [[ ${resolvers} == "[]" ]]; then
+        nameservers=
+    else
+        nameservers=$(echo ${resolvers} | json -a | sed -e "s/^/nameserver /")
+    fi
+
+    rm -f /etc/.resolv.conf.tmp
+    if [[ -n ${search} ]]; then
+        echo "${search}" > /etc/.resolv.conf.tmp
+    fi
+    if [[ -n ${nameservers} ]]; then
+        echo "${nameservers}" >> /etc/.resolv.conf.tmp
+    fi
+
+    cp /etc/.resolv.conf.tmp /etc/resolv.conf \
+        && cat /etc/.resolv.conf.tmp >&2 \
+        && rm -f /etc/.resolv.conf.tmp
+else
+    echo "Error getting resolvers, code: ${result}"
+fi
+
+# Fetch routes
+
+rm -f /etc/inet/static_routes.{tmp,toadd,todelete}
+
+# If re-running this script after initial boot, network/physical and
+# network/routing-setup are already enabled, so apply routing adds and
+# deletes manually
+if [[ $(/usr/bin/svcs -H -o state network/routing-setup) == "online" ]]; then
+  routing_up="true"
+  cp /etc/inet/static_routes{,.todelete}
+fi
+echo '# File generated by route(1M) - do not edit.' > \
+    /etc/inet/static_routes.tmp
+
+while IFS="|" read -r gateway dst linklocal; do
+  echo "route: gateway[${gateway}] dst[${dst}] linklocal[${linklocal}]"
+
+  if [[ -z ${gateway} ]] || [[ -z ${dst} ]]; then
+    continue;
+  fi
+
+  route_type=""
+  if [[ ${linklocal} == "true" ]]; then
+      route_type="-interface "
+  fi
+
+  echo "${route_type}${dst} ${gateway}" >> /etc/inet/static_routes.tmp
+  if [[ -n "${routing_up}" ]]; then
+    if ! grep "${dst} ${gateway}" /etc/inet/static_routes >/dev/null; then
+      echo "${route_type}${dst} ${gateway}" >> /etc/inet/static_routes.toadd
+    else
+      grep -v "${dst} ${gateway}" /etc/inet/static_routes.todelete > \
+        /etc/inet/static_routes.todelete.new
+      mv /etc/inet/static_routes.todelete{.new,}
+    fi
+  fi
+
+done < <(/usr/sbin/mdata-get sdc:routes \
+    | /usr/bin/json -d '|' -a gateway dst linklocal)
+
+
+if [[ -n "${routing_up}" ]]; then
+  if [[ -f /etc/inet/static_routes.toadd ]]; then
+    echo "Adding persistent routes:"
+    /usr/bin/egrep -v "^(#|$)" /etc/inet/static_routes.toadd | \
+        while read line; do
+      /usr/sbin/route -p add $line
+    done
+    rm /etc/inet/static_routes.toadd
+  fi
+  if [[ -f /etc/inet/static_routes.todelete ]]; then
+    echo "Deleting persistent routes:"
+    /usr/bin/egrep -v "^(#|$)" /etc/inet/static_routes.todelete | \
+        while read line; do
+      /usr/sbin/route -p delete $line
+    done
+    rm /etc/inet/static_routes.todelete
+  fi
+fi
+
+mv /etc/inet/static_routes{.tmp,}
+
+
+# Unconditionally enable mdata:execute, so that the last provisioning step
+# is always taken (regardless of whether user-script exists or not)
+svcadm enable smartdc/mdata:execute
 
 exit ${SMF_EXIT_OK}

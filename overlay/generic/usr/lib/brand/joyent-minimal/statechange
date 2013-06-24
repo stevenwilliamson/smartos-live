@@ -19,7 +19,7 @@
 #
 # CDDL HEADER END
 #
-# Copyright 2012 Joyent, Inc.  All rights reserved.
+# Copyright 2013 Joyent, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
 
@@ -145,6 +145,7 @@ setup_net()
 		allow_mac_spoof=$(get_boolean_nic_property ${nic} allow_mac_spoofing)
 		allow_restricted_traffic=$(get_boolean_nic_property ${nic} \
 		    allow_restricted_traffic)
+		allowed_ips=$(eval echo \$_ZONECFG_net_${nic}_allowed_ips)
 		vrid=$(eval echo \$_ZONECFG_net_${nic}_vrrp_vrid)
 		vrrp_primary_ip=$(eval \
 		    echo \$_ZONECFG_net_${nic}_vrrp_primary_ip)
@@ -261,6 +262,8 @@ setup_net()
 			enable_dhcp="true"
 			# This needs to be off for dhcp server zones
 			allow_ip_spoof="true"
+		else
+			enable_dhcp="false"
 		fi
 
 		comma=""
@@ -277,7 +280,7 @@ setup_net()
 			spoof_opts="${spoof_opts}${comma}restricted"
 			comma=","
 		fi
-		if [[ -z "${enable_dhcp}" ]]; then
+		if [[ ${enable_dhcp} == "false" ]]; then
 			spoof_opts="${spoof_opts}${comma}dhcp-nospoof"
 			comma=","
 		fi
@@ -312,19 +315,18 @@ setup_net()
 
 		if [[ -n "${zone_ip}" ]] && [[ $allow_ip_spoof != "true" ]] && \
 			    [[ "${zone_ip}" != "dhcp" ]]; then
-			allowed_ips="${zone_ip}"
+			allowed_ip_list="${zone_ip}"
 			[[ -n $vrrp_primary_ip ]] && \
-			    allowed_ips="${allowed_ips},${vrrp_primary_ip}"
+			    allowed_ip_list="${allowed_ip_list},${vrrp_primary_ip}"
+
+			[[ -n $allowed_ips ]] && \
+			    allowed_ip_list="${allowed_ip_list},${allowed_ips}"
 
 			dladm set-linkprop -t -z $ZONENAME \
-			    -p "allowed-ips=${allowed_ips}" ${nic}
+			    -p "allowed-ips=${allowed_ip_list}" ${nic}
 			if (( $? != 0 )); then
-				echo "error setting VNIC allowed-ips " \
-				    "$nic $allowed_ips"
-				logger -p daemon.err "zone $ZONENAME " \
-				    "error setting VNIC allowed-ips " \
-				    "$nic $allowed_ips"
-				exit 1
+				log_and_exit
+				    "error setting VNIC allowed-ips $nic $allowed_ip_list"
 			fi
 		fi
 
@@ -374,6 +376,54 @@ setup_net()
 
 		unlock_file
 	done
+}
+
+#
+# Log a message, then exit
+#
+log_and_exit()
+{
+	echo "$1"
+	logger -p daemon.err "zone $ZONENAME $1"
+	exit 1
+}
+
+#
+# Set up the firewall for the zone.
+#
+setup_fw()
+{
+	ipf_conf=$ZONEPATH/config/ipf.conf
+	if [ -e $ipf_conf ]; then
+		echo "starting firewall ($ipf_conf)"
+		/usr/sbin/ipf -E $ZONENAME
+		if (( $? != 0 )); then
+			log_and_exit "error enabling ipfilter"
+		fi
+
+		/usr/sbin/ipf -Fa $ZONENAME
+		if (( $? != 0 )); then
+			log_and_exit "error flushing ipfilter"
+		fi
+
+		/usr/sbin/ipf -f $ipf_conf $ZONENAME
+		if (( $? != 0 )); then
+			log_and_exit "error loading ipfilter config"
+		fi
+
+		/usr/sbin/ipf -y $ZONENAME
+		if (( $? != 0 )); then
+			log_and_exit "error syncing ipfilter interfaces"
+		fi
+	fi
+}
+
+cleanup_stale_socket()
+{
+	SOCKET=$1
+	if [[ -n $SOCKET && -e $ZONEPATH/root/${SOCKET} ]]; then
+		rm -f $ZONEPATH/root/${SOCKET}
+	fi
 }
 
 #
@@ -556,6 +606,14 @@ cleanup_mount()
 			echo "Error: GZ process $i under $1 blocking shutdown"
 			logger -p daemon.err "Error: zone $ZONENAME:" \
 			    "GZ process $i under $1 blocking shutdown"
+
+			local args="pargs: `pargs $i`"
+			echo "$args"
+			logger -p daemon.err "$args"
+
+			local tree="ptree: `ptree $i`"
+			echo "$tree"
+			logger -p daemon.err "$tree"
 		fi
 	done
 
@@ -576,12 +634,12 @@ cleanup_mount()
 	# Because the socket doesn't have enough information for us to tie to
 	# the specific GZ process, we hardcode to id things we know will open
 	# sockets into the zone:
-	#    /var/run/smartdc/metadata.sock
+	#    /.zonecontrol/metadata.sock
 	#    /var/run/.smartdc-amon.sock
 
 	ZVR=$ZONEPATH/root/var/run
 	[ -S $ZVR/smartdc/metadata.sock ] &&
-	    id_gz_sockholder /var/run/smartdc/metadata.sock
+	    id_gz_sockholder /.zonecontrol/metadata.sock
 
 	[ -S $ZVR/.smartdc-amon.sock ] &&
 	    id_gz_sockholder /var/run/.smartdc-amon.sock
@@ -601,6 +659,8 @@ load_sdc_config
 if [[ "$subcommand" == "post" && $cmd == 0 ]]; then
 	setup_snapshots
 	setup_net
+	setup_fw
+	cleanup_stale_socket "/.zonecontrol/metadata.sock"
 fi
 
 # We can't set a rctl until we have a process in the zone to grab

@@ -11,9 +11,9 @@ var vmtest = require('../common/vmtest.js');
 
 VM.loglevel = 'DEBUG';
 
-var image_uuid = vmtest.CURRENT_SMARTOS;
+var image_uuid = vmtest.CURRENT_SMARTOS_UUID;
 
-test('create and destroy 50 zones', {'timeout': 240000}, function(t) {
+test('create and destroy 50 zones', {'timeout': 600000}, function(t) {
     var i;
 
     i = 0;
@@ -28,13 +28,13 @@ test('create and destroy 50 zones', {'timeout': 240000}, function(t) {
                 'nowait': true}, state, [
                 function (cb) {
                     VM.load(state.uuid, function(err, obj) {
+                        i++;
                         if (err) {
                             t.ok(false, 'load obj from new VM: ' + err.message);
                             return cb(err);
                         }
                         t.ok(true, 'loaded obj for new VM');
                         cb();
-                        i++;
                     });
                 }
             ], callback);

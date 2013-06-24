@@ -116,7 +116,7 @@ function vnic_up
     typeset vlan_opt=
     typeset mac_addr_opt=
 
-    if [[ -z ${link} ]] || [[ -z ${iface} ]] || [[ -z ${ip} ]] || [[ -z ${netmask} ]]; then
+    if [[ -z ${link} ]] || [[ -z ${iface} ]] || [[ -z ${ip} ]] || ([[ ${ip} != "dhcp" ]] && [[ -z ${netmask} ]]); then
         echo "WARNING: not bringing up nic (insufficient configuration): $details"
         return
     fi
@@ -171,6 +171,10 @@ function create_aggrs
         dladm create-aggr -l $(echo ${links} | sed -e "s/,/ -l /g") \
             -L ${mode} ${aggr}
     done
+
+    # Creating the aggregations may affect the nic tags in sysinfo, so update:
+    /usr/bin/sysinfo -u
+    load_sdc_sysinfo
 }
 
 if smf_is_globalzone; then
@@ -208,6 +212,11 @@ if smf_is_globalzone; then
                 # also setup resolv.conf if we can
                 if [[ -n ${CONFIG_dns_domain} ]] && [[ -n ${CONFIG_dns_resolvers} ]]; then
                     echo "search ${CONFIG_dns_domain}" > /etc/resolv.conf
+                    if [[ -n ${CONFIG_binder_admin_ips} ]]; then
+                       for serv in $(echo "${CONFIG_binder_admin_ips}" | sed -e "s/,/ /g"); do
+                           echo "nameserver ${serv}" >> /etc/resolv.conf
+                       done
+                    fi
                     for serv in $(echo "${CONFIG_dns_resolvers}" | sed -e "s/,/ /g"); do
                         echo "nameserver ${serv}" >> /etc/resolv.conf
                     done
@@ -241,13 +250,6 @@ if smf_is_globalzone; then
             /sbin/ifconfig ${SYSINFO_NIC_admin} dhcp || /bin/true
             ADMIN_NIC_UP=true
 
-            # also setup resolv.conf if we can
-            if [[ -n ${CONFIG_dns_domain} ]] && [[ -n ${CONFIG_dns_resolvers} ]]; then
-                echo "search ${CONFIG_dns_domain}" > /etc/resolv.conf
-                for serv in $(echo "${CONFIG_dns_resolvers}" | sed -e "s/,/ /g"); do
-                    echo "nameserver ${serv}" >> /etc/resolv.conf
-                done
-            fi
         fi
 
         # If on VMWare or Parallels or VirtualBox, create a bridge which

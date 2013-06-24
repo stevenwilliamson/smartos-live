@@ -1,10 +1,10 @@
 /*
- * Copyright (c) 2012 Trent Mick. All rights reserved.
+ * Copyright (c) 2013 Trent Mick. All rights reserved.
  *
  * The bunyan logging library for node.js.
  */
 
-var VERSION = '0.14.5';
+var VERSION = '0.21.3';
 
 // Bunyan log format version. This becomes the 'v' field on all log records.
 // `0` is until I release a version '1.0.0' of node-bunyan. Thereafter,
@@ -15,75 +15,88 @@ var LOG_VERSION = 0;
 
 
 var xxx = function xxx(s) {     // internal dev/debug logging
-  var args = ['XX' + 'X: '+s].concat(Array.prototype.slice.call(arguments, 1));
-  console.error.apply(this, args);
+    var args = ['XX' + 'X: '+s].concat(
+        Array.prototype.slice.call(arguments, 1));
+    console.error.apply(this, args);
 };
-var xxx = function xxx() {};  // uncomment to turn of debug logging
+var xxx = function xxx() {};  // comment out to turn on debug logging
 
 
 var os = require('os');
 var fs = require('fs');
 var util = require('util');
 var assert = require('assert');
+try {
+    var dtrace = require('dtrace-provider');
+} catch (e) {
+    dtrace = null;
+}
 var EventEmitter = require('events').EventEmitter;
+
+// The 'mv' module is required for rotating-file stream support.
+try {
+    var mv = require('mv');
+} catch (e) {
+    mv = null;
+}
 
 
 
 //---- Internal support stuff
 
 function objCopy(obj) {
-  if (obj === null) {
-    return null;
-  } else if (Array.isArray(obj)) {
-    return obj.slice();
-  } else {
-    var copy = {};
-    Object.keys(obj).forEach(function (k) {
-      copy[k] = obj[k];
-    });
-    return copy;
-  }
+    if (obj === null) {
+        return null;
+    } else if (Array.isArray(obj)) {
+        return obj.slice();
+    } else {
+        var copy = {};
+        Object.keys(obj).forEach(function (k) {
+            copy[k] = obj[k];
+        });
+        return copy;
+    }
 }
 
 var format = util.format;
 if (!format) {
-  // If not node 0.6, then use its `util.format`:
-  // <https://github.com/joyent/node/blob/master/lib/util.js#L22>:
-  var inspect = util.inspect;
-  var formatRegExp = /%[sdj%]/g;
-  format = function format(f) {
-    if (typeof (f) !== 'string') {
-      var objects = [];
-      for (var i = 0; i < arguments.length; i++) {
-        objects.push(inspect(arguments[i]));
-      }
-      return objects.join(' ');
-    }
+    // If node < 0.6, then use its `util.format`:
+    // <https://github.com/joyent/node/blob/master/lib/util.js#L22>:
+    var inspect = util.inspect;
+    var formatRegExp = /%[sdj%]/g;
+    format = function format(f) {
+        if (typeof (f) !== 'string') {
+            var objects = [];
+            for (var i = 0; i < arguments.length; i++) {
+                objects.push(inspect(arguments[i]));
+            }
+            return objects.join(' ');
+        }
 
-    var i = 1;
-    var args = arguments;
-    var len = args.length;
-    var str = String(f).replace(formatRegExp, function (x) {
-      if (i >= len)
-        return x;
-      switch (x) {
-        case '%s': return String(args[i++]);
-        case '%d': return Number(args[i++]);
-        case '%j': return JSON.stringify(args[i++], safeCycles());
-        case '%%': return '%';
-        default:
-          return x;
-      }
-    });
-    for (var x = args[i]; i < len; x = args[++i]) {
-      if (x === null || typeof (x) !== 'object') {
-        str += ' ' + x;
-      } else {
-        str += ' ' + inspect(x);
-      }
-    }
-    return str;
-  };
+        var i = 1;
+        var args = arguments;
+        var len = args.length;
+        var str = String(f).replace(formatRegExp, function (x) {
+            if (i >= len)
+                return x;
+            switch (x) {
+                case '%s': return String(args[i++]);
+                case '%d': return Number(args[i++]);
+                case '%j': return JSON.stringify(args[i++], safeCycles());
+                case '%%': return '%';
+                default:
+                    return x;
+            }
+        });
+        for (var x = args[i]; i < len; x = args[++i]) {
+            if (x === null || typeof (x) !== 'object') {
+                str += ' ' + x;
+            } else {
+                str += ' ' + inspect(x);
+            }
+        }
+        return str;
+    };
 }
 
 
@@ -92,23 +105,23 @@ if (!format) {
  * See <http://code.google.com/p/v8/wiki/JavaScriptStackTraceApi>.
  */
 function getCaller3Info() {
-  var obj = {};
-  var saveLimit = Error.stackTraceLimit;
-  var savePrepare = Error.prepareStackTrace;
-  Error.stackTraceLimit = 3;
-  Error.captureStackTrace(this, getCaller3Info);
-  Error.prepareStackTrace = function (_, stack) {
-    var caller = stack[2];
-    obj.file = caller.getFileName();
-    obj.line = caller.getLineNumber();
-    var func = caller.getFunctionName();
-    if (func)
-      obj.func = func;
-  };
-  this.stack;
-  Error.stackTraceLimit = saveLimit;
-  Error.prepareStackTrace = savePrepare;
-  return obj;
+    var obj = {};
+    var saveLimit = Error.stackTraceLimit;
+    var savePrepare = Error.prepareStackTrace;
+    Error.stackTraceLimit = 3;
+    Error.captureStackTrace(this, getCaller3Info);
+    Error.prepareStackTrace = function (_, stack) {
+        var caller = stack[2];
+        obj.file = caller.getFileName();
+        obj.line = caller.getLineNumber();
+        var func = caller.getFunctionName();
+        if (func)
+            obj.func = func;
+    };
+    this.stack;
+    Error.stackTraceLimit = saveLimit;
+    Error.prepareStackTrace = savePrepare;
+    return obj;
 }
 
 
@@ -123,16 +136,16 @@ function getCaller3Info() {
  *    the warning.
  */
 function _warn(msg, file, line) {
-  assert.ok(msg);
-  var key;
-  if (file && line) {
-    key = file + ':' + line;
-    if (_warned[key]) {
-      return;
+    assert.ok(msg);
+    var key;
+    if (file && line) {
+        key = file + ':' + line;
+        if (_warned[key]) {
+            return;
+        }
+        _warned[key] = true;
     }
-    _warned[key] = true;
-  }
-  process.stderr.write(msg + '\n');
+    process.stderr.write(msg + '\n');
 }
 var _warned = {};
 
@@ -148,14 +161,17 @@ var ERROR = 50;
 var FATAL = 60;
 
 var levelFromName = {
-  'trace': TRACE,
-  'debug': DEBUG,
-  'info': INFO,
-  'warn': WARN,
-  'error': ERROR,
-  'fatal': FATAL
+    'trace': TRACE,
+    'debug': DEBUG,
+    'info': INFO,
+    'warn': WARN,
+    'error': ERROR,
+    'fatal': FATAL
 };
 
+// Dtrace probes.
+var dtp = undefined;
+var probes = dtrace && {};
 
 /**
  * Resolve a level number, name (upper or lowercase) to a level number value.
@@ -163,13 +179,13 @@ var levelFromName = {
  * @api public
  */
 function resolveLevel(nameOrNum) {
-  var level = (typeof (nameOrNum) === 'string'
-      ? levelFromName[nameOrNum.toLowerCase()]
-      : nameOrNum);
-  if (! (TRACE <= level && level <= FATAL)) {
-    throw new Error('invalid level: ' + nameOrNum);
-  }
-  return level;
+    var level = (typeof (nameOrNum) === 'string'
+            ? levelFromName[nameOrNum.toLowerCase()]
+            : nameOrNum);
+    if (! (TRACE <= level && level <= FATAL)) {
+        throw new Error('invalid level: ' + nameOrNum);
+    }
+    return level;
 }
 
 
@@ -185,13 +201,13 @@ function resolveLevel(nameOrNum) {
  *        objects with these fields:
  *          - `type`: The stream type. See README.md for full details.
  *            Often this is implied by the other fields. Examples are
- *            "file", "stream" and "raw".
- *          - `level`: Defaults to "info".
+ *            'file', 'stream' and "raw".
+ *          - `level`: Defaults to 'info'.
  *          - `path` or `stream`: The specify the file path or writeable
  *            stream to which log records are written. E.g.
  *            `stream: process.stdout`.
  *          - `closeOnExit` (boolean): Optional. Default is true for a
- *            "file" stream when `path` is given, false otherwise.
+ *            'file' stream when `path` is given, false otherwise.
  *        See README.md for full details.
  *      - `level`: set the level for a single output stream (cannot be used
  *        with `streams`)
@@ -212,213 +228,250 @@ function resolveLevel(nameOrNum) {
  *    creation.
  */
 function Logger(options, _childOptions, _childSimple) {
-  xxx('Logger start:', options)
-  if (! this instanceof Logger) {
-    return new Logger(options, _childOptions);
-  }
-
-  // Input arg validation.
-  var parent;
-  if (_childOptions !== undefined) {
-    parent = options;
-    options = _childOptions;
-    if (! parent instanceof Logger) {
-      throw new TypeError('invalid Logger creation: do not pass a second arg');
+    xxx('Logger start:', options)
+    if (! this instanceof Logger) {
+        return new Logger(options, _childOptions);
     }
-  }
-  if (!options) {
-    throw new TypeError('options (object) is required');
-  }
-  if (!parent) {
-    if (!options.name) {
-      throw new TypeError('options.name (string) is required');
+
+    // Input arg validation.
+    var parent;
+    if (_childOptions !== undefined) {
+        parent = options;
+        options = _childOptions;
+        if (! parent instanceof Logger) {
+            throw new TypeError(
+                'invalid Logger creation: do not pass a second arg');
+        }
     }
-  } else {
-    if (options.name) {
-      throw new TypeError('invalid options.name: child cannot set logger name');
+    if (!options) {
+        throw new TypeError('options (object) is required');
     }
-  }
-  if ((options.stream || options.level) && options.streams) {
-    throw new TypeError(
-      'cannot mix "streams" with "stream" or "level" options');
-  }
-  if (options.streams && !Array.isArray(options.streams)) {
-    throw new TypeError('invalid options.streams: must be an array')
-  }
-  if (options.serializers && (typeof (options.serializers) !== 'object' ||
-      Array.isArray(options.serializers))) {
-    throw new TypeError('invalid options.serializers: must be an object')
-  }
-
-  EventEmitter.call(this);
-
-  // Fast path for simple child creation.
-  if (parent && _childSimple) {
-    // `_isSimpleChild` is a signal to stream close handling that this child
-    // owns none of its streams.
-    this._isSimpleChild = true;
-
-    this._level = parent._level;
-    this.streams = parent.streams;
-    this.serializers = parent.serializers;
-    this.src = parent.src;
-    var fields = this.fields = {};
-    var parentFieldNames = Object.keys(parent.fields);
-    for (var i = 0; i < parentFieldNames.length; i++) {
-      var name = parentFieldNames[i];
-      fields[name] = parent.fields[name];
-    }
-    var names = Object.keys(options);
-    for (var i = 0; i < names.length; i++) {
-      var name = names[i];
-      fields[name] = options[name];
-    }
-    return;
-  }
-
-  // Null values.
-  var self = this;
-  if (parent) {
-    this._level = parent._level;
-    this.streams = [];
-    for (var i = 0; i < parent.streams.length; i++) {
-      var s = objCopy(parent.streams[i]);
-      s.closeOnExit = false; // Don't own parent stream.
-      this.streams.push(s);
-    }
-    this.serializers = objCopy(parent.serializers);
-    this.src = parent.src;
-    this.fields = objCopy(parent.fields);
-  } else {
-    this._level = Number.POSITIVE_INFINITY;
-    this.streams = [];
-    this.serializers = null;
-    this.src = false;
-    this.fields = {};
-  }
-
-  // Helpers
-  function addStream(s) {
-    s = objCopy(s);
-
-    // Implicit 'type' from other args.
-    var type = s.type;
-    if (!s.type) {
-      if (s.stream) {
-        s.type = 'stream';
-      } else if (s.path) {
-        s.type = 'file'
-      }
-    }
-    s.raw = (s.type === 'raw');  // PERF: Allow for faster check in `_emit`.
-
-    if (s.level) {
-      s.level = resolveLevel(s.level);
+    if (!parent) {
+        if (!options.name) {
+            throw new TypeError('options.name (string) is required');
+        }
     } else {
-      s.level = INFO;
+        if (options.name) {
+            throw new TypeError(
+                'invalid options.name: child cannot set logger name');
+        }
     }
-    if (s.level < self._level) {
-      self._level = s.level;
+    if (options.stream && options.streams) {
+        throw new TypeError('cannot mix "streams" and "stream" options');
+    }
+    if (options.streams && !Array.isArray(options.streams)) {
+        throw new TypeError('invalid options.streams: must be an array')
+    }
+    if (options.serializers && (typeof (options.serializers) !== 'object' ||
+            Array.isArray(options.serializers))) {
+        throw new TypeError('invalid options.serializers: must be an object')
     }
 
-    switch (s.type) {
-    case 'stream':
-      if (!s.closeOnExit) {
-        s.closeOnExit = false;
-      }
-      break;
-    case 'file':
-      if (!s.stream) {
-        s.stream = fs.createWriteStream(s.path,
-          {flags: 'a', encoding: 'utf8'});
-        s.stream.on('error', function (err) {
-          self.emit('error', err, s);
+    EventEmitter.call(this);
+
+    // Fast path for simple child creation.
+    if (parent && _childSimple) {
+        // `_isSimpleChild` is a signal to stream close handling that this child
+        // owns none of its streams.
+        this._isSimpleChild = true;
+
+        this._level = parent._level;
+        this.streams = parent.streams;
+        this.serializers = parent.serializers;
+        this.src = parent.src;
+        var fields = this.fields = {};
+        var parentFieldNames = Object.keys(parent.fields);
+        for (var i = 0; i < parentFieldNames.length; i++) {
+            var name = parentFieldNames[i];
+            fields[name] = parent.fields[name];
+        }
+        var names = Object.keys(options);
+        for (var i = 0; i < names.length; i++) {
+            var name = names[i];
+            fields[name] = options[name];
+        }
+        return;
+    }
+
+    // Null values.
+    var self = this;
+    if (parent) {
+        this._level = parent._level;
+        this.streams = [];
+        for (var i = 0; i < parent.streams.length; i++) {
+            var s = objCopy(parent.streams[i]);
+            s.closeOnExit = false; // Don't own parent stream.
+            this.streams.push(s);
+        }
+        this.serializers = objCopy(parent.serializers);
+        this.src = parent.src;
+        this.fields = objCopy(parent.fields);
+        if (options.level) {
+            this.level(options.level);
+        }
+    } else {
+        this._level = Number.POSITIVE_INFINITY;
+        this.streams = [];
+        this.serializers = null;
+        this.src = false;
+        this.fields = {};
+    }
+
+    if (!dtp && dtrace) {
+        dtp = dtrace.createDTraceProvider('bunyan');
+
+        for (var level in levelFromName) {
+            var probe;
+
+            probes[levelFromName[level]] = probe =
+                dtp.addProbe('log-' + level, 'char *');
+
+            // Explicitly add a reference to dtp to prevent it from being GC'd
+            probe.dtp = dtp;
+        }
+
+        dtp.enable();
+    }
+
+    // Helpers
+    function addStream(s) {
+        s = objCopy(s);
+
+        // Implicit 'type' from other args.
+        var type = s.type;
+        if (!s.type) {
+            if (s.stream) {
+                s.type = 'stream';
+            } else if (s.path) {
+                s.type = 'file'
+            }
+        }
+        s.raw = (s.type === 'raw');  // PERF: Allow for faster check in `_emit`.
+
+        if (s.level) {
+            s.level = resolveLevel(s.level);
+        } else if (options.level) {
+            s.level = resolveLevel(options.level);
+        } else {
+            s.level = INFO;
+        }
+        if (s.level < self._level) {
+            self._level = s.level;
+        }
+
+        switch (s.type) {
+        case 'stream':
+            if (!s.closeOnExit) {
+                s.closeOnExit = false;
+            }
+            break;
+        case 'file':
+            if (!s.stream) {
+                s.stream = fs.createWriteStream(s.path,
+                    {flags: 'a', encoding: 'utf8'});
+                s.stream.on('error', function (err) {
+                    self.emit('error', err, s);
+                });
+                if (!s.closeOnExit) {
+                    s.closeOnExit = true;
+                }
+            } else {
+                if (!s.closeOnExit) {
+                    s.closeOnExit = false;
+                }
+            }
+            break;
+        case 'rotating-file':
+            assert.ok(!s.stream,
+                '"rotating-file" stream should not give a "stream"');
+            assert.ok(s.path);
+            assert.ok(mv, '"rotating-file" stream type is not supported: '
+                + 'missing "mv" module');
+            s.stream = new RotatingFileStream(s);
+            if (!s.closeOnExit) {
+                s.closeOnExit = true;
+            }
+            break;
+        case 'raw':
+            if (!s.closeOnExit) {
+                s.closeOnExit = false;
+            }
+            break;
+        default:
+            throw new TypeError('unknown stream type "' + s.type + '"');
+        }
+
+        self.streams.push(s);
+    }
+
+    function addSerializers(serializers) {
+        if (!self.serializers) {
+            self.serializers = {};
+        }
+        Object.keys(serializers).forEach(function (field) {
+            var serializer = serializers[field];
+            if (typeof (serializer) !== 'function') {
+                throw new TypeError(format(
+                    'invalid serializer for "%s" field: must be a function',
+                    field));
+            } else {
+                self.serializers[field] = serializer;
+            }
         });
-        if (!s.closeOnExit) {
-          s.closeOnExit = true;
-        }
-      } else {
-        if (!s.closeOnExit) {
-          s.closeOnExit = false;
-        }
-      }
-      break;
-    case 'raw':
-      if (!s.closeOnExit) {
-        s.closeOnExit = false;
-      }
-      break;
-    default:
-      throw new TypeError('unknown stream type "' + s.type + '"');
     }
 
-    self.streams.push(s);
-  }
-
-  function addSerializers(serializers) {
-    if (!self.serializers) {
-      self.serializers = {};
+    // Handle *config* options (i.e. options that are not just plain data
+    // for log records).
+    if (options.stream) {
+        addStream({
+            type: 'stream',
+            stream: options.stream,
+            closeOnExit: false,
+            level: (options.level ? resolveLevel(options.level) : INFO)
+        });
+    } else if (options.streams) {
+        options.streams.forEach(addStream);
+    } else if (parent && options.level) {
+        this.level(options.level);
+    } else if (!parent) {
+        addStream({
+            type: 'stream',
+            stream: process.stdout,
+            closeOnExit: false,
+            level: (options.level ? resolveLevel(options.level) : INFO)
+        });
     }
-    Object.keys(serializers).forEach(function (field) {
-      var serializer = serializers[field];
-      if (typeof (serializer) !== 'function') {
-        throw new TypeError(format(
-          'invalid serializer for "%s" field: must be a function', field));
-      } else {
-        self.serializers[field] = serializer;
-      }
-    });
-  }
+    if (options.serializers) {
+        addSerializers(options.serializers);
+    }
+    if (options.src) {
+        this.src = true;
+    }
+    xxx('Logger: ', self)
 
-  // Handle *config* options.
-  if (options.stream) {
-    addStream({
-      type: 'stream',
-      stream: options.stream,
-      closeOnExit: false,
-      level: (options.level ? resolveLevel(options.level) : INFO)
+    // Fields.
+    // These are the default fields for log records (minus the attributes
+    // removed in this constructor). To allow storing raw log records
+    // (unrendered), `this.fields` must never be mutated. Create a copy for
+    // any changes.
+    var fields = objCopy(options);
+    delete fields.stream;
+    delete fields.level;
+    delete fields.streams;
+    delete fields.serializers;
+    delete fields.src;
+    if (this.serializers) {
+        this._applySerializers(fields);
+    }
+    if (!fields.hostname) {
+        fields.hostname = os.hostname();
+    }
+    if (!fields.pid) {
+        fields.pid = process.pid;
+    }
+    Object.keys(fields).forEach(function (k) {
+        self.fields[k] = fields[k];
     });
-  } else if (options.streams) {
-    options.streams.forEach(addStream);
-  } else if (!parent) {
-    addStream({
-      type: 'stream',
-      stream: process.stdout,
-      closeOnExit: false,
-      level: (options.level ? resolveLevel(options.level) : INFO)
-    });
-  }
-  if (options.serializers) {
-    addSerializers(options.serializers);
-  }
-  if (options.src) {
-    this.src = true;
-  }
-  xxx('Logger: ', self)
-
-  // Fields.
-  // These are the default fields for log records (minus the attributes
-  // removed in this constructor). To allow storing raw log records
-  // (unrendered), `this.fields` must never be mutated. Create a copy for
-  // any changes.
-  var fields = objCopy(options);
-  delete fields.stream;
-  delete fields.level;
-  delete fields.streams;
-  delete fields.serializers;
-  delete fields.src;
-  if (this.serializers) {
-    this._applySerializers(fields);
-  }
-  if (!fields.hostname) {
-    fields.hostname = os.hostname();
-  }
-  if (!fields.pid) {
-    fields.pid = process.pid;
-  }
-  Object.keys(fields).forEach(function (k) {
-    self.fields[k] = fields[k];
-  });
 }
 
 util.inherits(Logger, EventEmitter);
@@ -439,16 +492,19 @@ util.inherits(Logger, EventEmitter);
  * @param options {Object} Optional. Set of options to apply to the child.
  *    All of the same options for a new Logger apply here. Notes:
  *      - The parent's streams are inherited and cannot be removed in this
- *        call.
+ *        call. Any given `streams` are *added* to the set inherited from
+ *        the parent.
  *      - The parent's serializers are inherited, though can effectively be
  *        overwritten by using duplicate keys.
+ *      - Can use `level` to set the level of the streams inherited from
+ *        the parent. The level for the parent is NOT affected.
  * @param simple {Boolean} Optional. Set to true to assert that `options`
  *    (a) only add fields (no config) and (b) no serialization handling is
  *    required for them. IOW, this is a fast path for frequent child
  *    creation. See 'tools/timechild.js' for numbers.
  */
 Logger.prototype.child = function (options, simple) {
-  return new Logger(this, options || {}, simple);
+    return new Logger(this, options || {}, simple);
 }
 
 
@@ -459,19 +515,19 @@ Logger.prototype.child = function (options, simple) {
  * This closes streams (that it owns, as per 'endOnClose' attributes on
  * streams), etc. Typically you **don't** need to bother calling this.
 Logger.prototype.close = function () {
-  if (this._closed) {
-    return;
-  }
-  if (!this._isSimpleChild) {
-    self.streams.forEach(function (s) {
-      if (s.endOnClose) {
-        xxx('closing stream s:', s);
-        s.stream.end();
-        s.endOnClose = false;
-      }
-    });
-  }
-  this._closed = true;
+    if (this._closed) {
+        return;
+    }
+    if (!this._isSimpleChild) {
+        self.streams.forEach(function (s) {
+            if (s.endOnClose) {
+                xxx('closing stream s:', s);
+                s.stream.end();
+                s.endOnClose = false;
+            }
+        });
+    }
+    this._closed = true;
 }
  */
 /* END JSSTYLED */
@@ -489,15 +545,15 @@ Logger.prototype.close = function () {
  *    log.level('info')     // can use 'info' et al aliases
  */
 Logger.prototype.level = function level(value) {
-  if (value === undefined) {
-    return this._level;
-  }
-  var newLevel = resolveLevel(value);
-  var len = this.streams.length;
-  for (var i = 0; i < len; i++) {
-    this.streams[i].level = newLevel;
-  }
-  this._level = newLevel;
+    if (value === undefined) {
+        return this._level;
+    }
+    var newLevel = resolveLevel(value);
+    var len = this.streams.length;
+    for (var i = 0; i < len; i++) {
+        this.streams[i].level = newLevel;
+    }
+    this._level = newLevel;
 }
 
 
@@ -534,39 +590,39 @@ Logger.prototype.level = function level(value) {
  * @throws {Error} If there is no stream with the given name.
  */
 Logger.prototype.levels = function levels(name, value) {
-  if (name === undefined) {
-    assert.equal(value, undefined);
-    return this.streams.map(
-      function (s) { return s.level });
-  }
-  var stream;
-  if (typeof (name) === 'number') {
-    stream = this.streams[name];
-    if (stream === undefined) {
-      throw new Error('invalid stream index: ' + name);
+    if (name === undefined) {
+        assert.equal(value, undefined);
+        return this.streams.map(
+            function (s) { return s.level });
     }
-  } else {
-    var len = this.streams.length;
-    for (var i = 0; i < len; i++) {
-      var s = this.streams[i];
-      if (s.name === name) {
-        stream = s;
-        break;
-      }
+    var stream;
+    if (typeof (name) === 'number') {
+        stream = this.streams[name];
+        if (stream === undefined) {
+            throw new Error('invalid stream index: ' + name);
+        }
+    } else {
+        var len = this.streams.length;
+        for (var i = 0; i < len; i++) {
+            var s = this.streams[i];
+            if (s.name === name) {
+                stream = s;
+                break;
+            }
+        }
+        if (!stream) {
+            throw new Error(format('no stream with name "%s"', name));
+        }
     }
-    if (!stream) {
-      throw new Error(format('no stream with name "%s"', name));
+    if (value === undefined) {
+        return stream.level;
+    } else {
+        var newLevel = resolveLevel(value);
+        stream.level = newLevel;
+        if (newLevel < this._level) {
+            this._level = newLevel;
+        }
     }
-  }
-  if (value === undefined) {
-    return stream.level;
-  } else {
-    var newLevel = resolveLevel(value);
-    stream.level = newLevel;
-    if (newLevel < this._level) {
-      this._level = newLevel;
-    }
-  }
 }
 
 
@@ -576,39 +632,35 @@ Logger.prototype.levels = function levels(name, value) {
  * Pre-condition: This is only called if there is at least one serializer.
  *
  * @param fields (Object) The log record fields.
- * @param keys (Array) Optional array of keys to which to limit processing.
+ * @param excludeFields (Object) Optional mapping of keys to `true` for
+ *    keys to NOT apply a serializer.
  */
-Logger.prototype._applySerializers = function (fields, keys) {
-  var self = this;
+Logger.prototype._applySerializers = function (fields, excludeFields) {
+    var self = this;
 
-  // Mapping of keys to potentially serialize.
-  var applyKeys = fields;
-  if (keys) {
-    applyKeys = {};
-    for (var i = 0; i < keys.length; i++) {
-      applyKeys[keys[i]] = true;
-    }
-  }
+    xxx('_applySerializers: excludeFields', excludeFields);
 
-  xxx('_applySerializers: applyKeys', applyKeys);
-
-  // Check each serializer against these (presuming number of serializers
-  // is typically less than number of fields).
-  Object.keys(this.serializers).forEach(function (name) {
-    if (applyKeys[name]) {
-      xxx('_applySerializers; apply to "%s" key', name)
-      try {
-        fields[name] = self.serializers[name](fields[name]);
-      } catch (err) {
-        _warn(format('bunyan: ERROR: This should never happen. '
-          + 'This is a bug in <https://github.com/trentm/node-bunyan> or '
-          + 'in this application. Exception from "%s" Logger serializer: %s',
-          name, err.stack || err));
-        fields[name] = format('(Error in Bunyan log "%s" serializer '
-          + 'broke field. See stderr for details.)', name);
-      }
-    }
-  });
+    // Check each serializer against these (presuming number of serializers
+    // is typically less than number of fields).
+    Object.keys(this.serializers).forEach(function (name) {
+        if (fields[name] === undefined ||
+            (excludeFields && excludeFields[name]))
+        {
+            return;
+        }
+        xxx('_applySerializers; apply to "%s" key', name)
+        try {
+            fields[name] = self.serializers[name](fields[name]);
+        } catch (err) {
+            _warn(format('bunyan: ERROR: This should never happen. '
+                + 'This is a bug in <https://github.com/trentm/node-bunyan> '
+                + 'or in this application. Exception from "%s" Logger '
+                + 'serializer: %s',
+                name, err.stack || err));
+            fields[name] = format('(Error in Bunyan log "%s" serializer '
+                + 'broke field. See stderr for details.)', name);
+        }
+    });
 }
 
 
@@ -622,8 +674,8 @@ Logger.prototype._applySerializers = function (fields, keys) {
  * it is emitted.
  */
 Logger.prototype._mkRecord = function (fields, level, msgArgs) {
-  var recFields = (fields ? objCopy(fields) : null);
-  return [this.fields, recFields, level, msgArgs];
+    var recFields = (fields ? objCopy(fields) : null);
+    return [this.fields, recFields, level, msgArgs];
 }
 
 
@@ -631,324 +683,151 @@ Logger.prototype._mkRecord = function (fields, level, msgArgs) {
  * Emit a log record.
  *
  * @param rec {log record}
+ * @param noemit {Boolean} Optional. Set to true to skip emission
+ *      and just return the JSON string.
  */
-Logger.prototype._emit = function (rec) {
-  var i;
+Logger.prototype._emit = function (rec, noemit) {
+    var i;
 
-  var obj = objCopy(rec[0]);
-  var level = obj.level = rec[2];
-  var recFields = rec[1];
-  if (recFields) {
-    if (this.serializers) {
-      this._applySerializers(recFields);
+    // Lazily determine if this Logger has non-'raw' streams. If there are
+    // any, then we need to stringify the log record.
+    if (this.haveNonRawStreams === undefined) {
+        this.haveNonRawStreams = false;
+        for (i = 0; i < this.streams.length; i++) {
+            if (!this.streams[i].raw) {
+                this.haveNonRawStreams = true;
+                break;
+            }
+        }
     }
-    Object.keys(recFields).forEach(function (k) {
-      obj[k] = recFields[k];
-    });
-  }
-  xxx('Record:', rec)
-  obj.msg = format.apply(this, rec[3]);
-  if (!obj.time) {
-    obj.time = (new Date());
-  }
-  // Get call source info
-  if (this.src && !obj.src) {
-    obj.src = getCaller3Info()
-  }
-  obj.v = LOG_VERSION;
 
-  // Lazily determine if this Logger has non-"raw" streams. If there are
-  // any, then we need to stringify the log record.
-  if (this.haveNonRawStreams === undefined) {
-    this.haveNonRawStreams = false;
+    // Stringify the object. Attempt to warn/recover on error.
+    var str;
+    if (noemit || this.haveNonRawStreams) {
+        str = JSON.stringify(rec, safeCycles()) + '\n';
+    }
+
+    if (noemit)
+        return str;
+
+    var level = rec.level;
     for (i = 0; i < this.streams.length; i++) {
-      if (!this.streams[i].raw) {
-        this.haveNonRawStreams = true;
-        break;
-      }
-    }
-  }
+        var s = this.streams[i];
+        if (s.level <= level) {
+            xxx('writing log rec "%s" to "%s" stream (%d <= %d): %j',
+                rec.msg, s.type, s.level, level, rec);
+            s.stream.write(s.raw ? rec : str);
+        }
+    };
 
-  // Stringify the object. Attempt to warn/recover on error.
-  var str;
-  if (this.haveNonRawStreams) {
-    str = JSON.stringify(obj, safeCycles()) + '\n';
-  }
-
-  for (i = 0; i < this.streams.length; i++) {
-    var s = this.streams[i];
-    if (s.level <= level) {
-      xxx('writing log rec "%s" to "%s" stream (%d <= %d): %j',
-        obj.msg, s.type, s.level, level, obj);
-      s.stream.write(s.raw ? obj : str);
-    }
-  };
+    return str;
 }
 
 
 /**
- * Log a record at TRACE level.
+ * Build a log emitter function for level minLevel. I.e. this is the
+ * creator of `log.info`, `log.error`, etc.
+ */
+function mkLogEmitter(minLevel) {
+    return function () {
+        var log = this;
+
+        function mkRecord(args) {
+            var excludeFields;
+            if (args[0] instanceof Error) {
+                // `log.<level>(err, ...)`
+                fields = {err: errSerializer(args[0])};
+                excludeFields = {err: true};
+                if (args.length === 1) {
+                    msgArgs = [fields.err.message];
+                } else {
+                    msgArgs = Array.prototype.slice.call(args, 1);
+                }
+            } else if (typeof (args[0]) === 'string') {
+                // `log.<level>(msg, ...)`
+                fields = null;
+                msgArgs = Array.prototype.slice.call(args);
+            } else if (Buffer.isBuffer(args[0])) {  // `log.<level>(buf, ...)`
+                // Almost certainly an error, show `inspect(buf)`. See bunyan
+                // issue #35.
+                fields = null;
+                msgArgs = Array.prototype.slice.call(args);
+                msgArgs[0] = util.inspect(msgArgs[0]);
+            } else {  // `log.<level>(fields, msg, ...)`
+                fields = args[0];
+                msgArgs = Array.prototype.slice.call(args, 1);
+            }
+
+            // Build up the record object.
+            var rec = objCopy(log.fields);
+            var level = rec.level = minLevel;
+            var recFields = (fields ? objCopy(fields) : null);
+            if (recFields) {
+                if (log.serializers) {
+                    log._applySerializers(recFields, excludeFields);
+                }
+                Object.keys(recFields).forEach(function (k) {
+                    rec[k] = recFields[k];
+                });
+            }
+            rec.msg = format.apply(log, msgArgs);
+            if (!rec.time) {
+                rec.time = (new Date());
+            }
+            // Get call source info
+            if (log.src && !rec.src) {
+                rec.src = getCaller3Info()
+            }
+            rec.v = LOG_VERSION;
+
+            return rec;
+        };
+
+        var fields = null;
+        var msgArgs = arguments;
+        var str = null;
+        var rec = null;
+        if (arguments.length === 0) {   // `log.<level>()`
+            return (this._level <= minLevel);
+        } else if (this._level > minLevel) {
+            /* pass through */
+        } else {
+            rec = mkRecord(msgArgs);
+            str = this._emit(rec);
+        }
+        probes && probes[minLevel].fire(function () {
+                return [ str ||
+                    (rec && log._emit(rec, true)) ||
+                    log._emit(mkRecord(msgArgs), true) ];
+        });
+    }
+}
+
+
+/**
+ * The functions below log a record at a specific level.
  *
  * Usages:
- *    log.trace()  -> boolean is-trace-enabled
- *    log.trace(<Error> err, [<string> msg, ...])
- *    log.trace(<string> msg, ...)
- *    log.trace(<object> fields, <string> msg, ...)
+ *    log.<level>()  -> boolean is-trace-enabled
+ *    log.<level>(<Error> err, [<string> msg, ...])
+ *    log.<level>(<string> msg, ...)
+ *    log.<level>(<object> fields, <string> msg, ...)
+ *
+ * where <level> is the lowercase version of the log level. E.g.:
+ *
+ *    log.info()
  *
  * @params fields {Object} Optional set of additional fields to log.
  * @params msg {String} Log message. This can be followed by additional
  *    arguments that are handled like
  *    [util.format](http://nodejs.org/docs/latest/api/all.html#util.format).
  */
-Logger.prototype.trace = function () {
-  var fields = null, msgArgs = null;
-  if (arguments.length === 0) {   // `log.trace()`
-    return (this._level <= TRACE);
-  } else if (this._level > TRACE) {
-    return;
-  } else if (arguments[0] instanceof Error) {
-    // `log.trace(err, ...)`
-    fields = {err: errSerializer(arguments[0])};
-    if (arguments.length === 1) {
-      msgArgs = [fields.err.message];
-    } else {
-      msgArgs = Array.prototype.slice.call(arguments, 1);
-    }
-  } else if (typeof (arguments[0]) === 'string') {  // `log.trace(msg, ...)`
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-  } else if (Buffer.isBuffer(arguments[0])) {  // `log.trace(buf, ...)`
-    // Almost certainly an error, show `inspect(buf)`. See bunyan issue #35.
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-    msgArgs[0] = util.inspect(msgArgs[0]);
-  } else {  // `log.trace(fields, msg, ...)`
-    fields = arguments[0];
-    msgArgs = Array.prototype.slice.call(arguments, 1);
-  }
-  var rec = this._mkRecord(fields, TRACE, msgArgs);
-  this._emit(rec);
-}
-
-/**
- * Log a record at DEBUG level.
- *
- * Usages:
- *    log.debug()  -> boolean is-debug-enabled
- *    log.debug(<Error> err, [<string> msg, ...])
- *    log.debug(<string> msg, ...)
- *    log.debug(<object> fields, <string> msg, ...)
- *
- * @params fields {Object} Optional set of additional fields to log.
- * @params msg {String} Log message. This can be followed by additional
- *    arguments that are handled like
- *    [util.format](http://nodejs.org/docs/latest/api/all.html#util.format).
- */
-Logger.prototype.debug = function () {
-  var fields = null, msgArgs = null;
-  if (arguments.length === 0) {   // `log.debug()`
-    return (this._level <= DEBUG);
-  } else if (this._level > DEBUG) {
-    return;
-  } else if (arguments[0] instanceof Error) {
-    // `log.debug(err, ...)`
-    fields = {err: errSerializer(arguments[0])};
-    if (arguments.length === 1) {
-      msgArgs = [fields.err.message];
-    } else {
-      msgArgs = Array.prototype.slice.call(arguments, 1);
-    }
-  } else if (typeof (arguments[0]) === 'string') {  // `log.debug(msg, ...)`
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-  } else if (Buffer.isBuffer(arguments[0])) {  // `log.debug(buf, ...)`
-    // Almost certainly an error, show `inspect(buf)`. See bunyan issue #35.
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-    msgArgs[0] = util.inspect(msgArgs[0]);
-  } else {  // `log.debug(fields, msg, ...)`
-    fields = arguments[0];
-    msgArgs = Array.prototype.slice.call(arguments, 1);
-  }
-  var rec = this._mkRecord(fields, DEBUG, msgArgs);
-  this._emit(rec);
-}
-
-/**
- * Log a record at INFO level.
- *
- * Usages:
- *    log.info()  -> boolean is-info-enabled
- *    log.info(<Error> err, [<string> msg, ...])
- *    log.info(<string> msg, ...)
- *    log.info(<object> fields, <string> msg, ...)
- *
- * @params fields {Object} Optional set of additional fields to log.
- * @params msg {String} Log message. This can be followed by additional
- *    arguments that are handled like
- *    [util.format](http://nodejs.org/docs/latest/api/all.html#util.format).
- */
-Logger.prototype.info = function () {
-  var fields = null, msgArgs = null;
-  if (arguments.length === 0) {   // `log.info()`
-    return (this._level <= INFO);
-  } else if (this._level > INFO) {
-    return;
-  } else if (arguments[0] instanceof Error) {
-    // `log.info(err, ...)`
-    fields = {err: errSerializer(arguments[0])};
-    if (arguments.length === 1) {
-      msgArgs = [fields.err.message];
-    } else {
-      msgArgs = Array.prototype.slice.call(arguments, 1);
-    }
-  } else if (typeof (arguments[0]) === 'string') {  // `log.info(msg, ...)`
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-  } else if (Buffer.isBuffer(arguments[0])) {  // `log.info(buf, ...)`
-    // Almost certainly an error, show `inspect(buf)`. See bunyan issue #35.
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-    msgArgs[0] = util.inspect(msgArgs[0]);
-  } else {  // `log.info(fields, msg, ...)`
-    fields = arguments[0];
-    msgArgs = Array.prototype.slice.call(arguments, 1);
-  }
-  var rec = this._mkRecord(fields, INFO, msgArgs);
-  this._emit(rec);
-}
-
-/**
- * Log a record at WARN level.
- *
- * Usages:
- *    log.warn()  -> boolean is-warn-enabled
- *    log.warn(<Error> err, [<string> msg, ...])
- *    log.warn(<string> msg, ...)
- *    log.warn(<object> fields, <string> msg, ...)
- *
- * @params fields {Object} Optional set of additional fields to log.
- * @params msg {String} Log message. This can be followed by additional
- *    arguments that are handled like
- *    [util.format](http://nodejs.org/docs/latest/api/all.html#util.format).
- */
-Logger.prototype.warn = function () {
-  var fields = null, msgArgs = null;
-  if (arguments.length === 0) {   // `log.warn()`
-    return (this._level <= WARN);
-  } else if (this._level > WARN) {
-    return;
-  } else if (arguments[0] instanceof Error) {
-    // `log.warn(err, ...)`
-    fields = {err: errSerializer(arguments[0])};
-    if (arguments.length === 1) {
-      msgArgs = [fields.err.message];
-    } else {
-      msgArgs = Array.prototype.slice.call(arguments, 1);
-    }
-  } else if (typeof (arguments[0]) === 'string') {  // `log.warn(msg, ...)`
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-  } else if (Buffer.isBuffer(arguments[0])) {  // `log.warn(buf, ...)`
-    // Almost certainly an error, show `inspect(buf)`. See bunyan issue #35.
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-    msgArgs[0] = util.inspect(msgArgs[0]);
-  } else {  // `log.warn(fields, msg, ...)`
-    fields = arguments[0];
-    msgArgs = Array.prototype.slice.call(arguments, 1);
-  }
-  var rec = this._mkRecord(fields, WARN, msgArgs);
-  this._emit(rec);
-}
-
-/**
- * Log a record at ERROR level.
- *
- * Usages:
- *    log.error()  -> boolean is-error-enabled
- *    log.error(<Error> err, [<string> msg, ...])
- *    log.error(<string> msg, ...)
- *    log.error(<object> fields, <string> msg, ...)
- *
- * @params fields {Object} Optional set of additional fields to log.
- * @params msg {String} Log message. This can be followed by additional
- *    arguments that are handled like
- *    [util.format](http://nodejs.org/docs/latest/api/all.html#util.format).
- */
-Logger.prototype.error = function () {
-  var fields = null, msgArgs = null;
-  if (arguments.length === 0) {   // `log.error()`
-    return (this._level <= ERROR);
-  } else if (this._level > ERROR) {
-    return;
-  } else if (arguments[0] instanceof Error) {
-    // `log.error(err, ...)`
-    fields = {err: errSerializer(arguments[0])};
-    if (arguments.length === 1) {
-      msgArgs = [fields.err.message];
-    } else {
-      msgArgs = Array.prototype.slice.call(arguments, 1);
-    }
-  } else if (typeof (arguments[0]) === 'string') {  // `log.error(msg, ...)`
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-  } else if (Buffer.isBuffer(arguments[0])) {  // `log.error(buf, ...)`
-    // Almost certainly an error, show `inspect(buf)`. See bunyan issue #35.
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-    msgArgs[0] = util.inspect(msgArgs[0]);
-  } else {  // `log.error(fields, msg, ...)`
-    fields = arguments[0];
-    msgArgs = Array.prototype.slice.call(arguments, 1);
-  }
-  var rec = this._mkRecord(fields, ERROR, msgArgs);
-  this._emit(rec);
-}
-
-/**
- * Log a record at FATAL level.
- *
- * Usages:
- *    log.fatal()  -> boolean is-fatal-enabled
- *    log.fatal(<Error> err, [<string> msg, ...])
- *    log.fatal(<string> msg, ...)
- *    log.fatal(<object> fields, <string> msg, ...)
- *
- * @params fields {Object} Optional set of additional fields to log.
- * @params msg {String} Log message. This can be followed by additional
- *    arguments that are handled like
- *    [util.format](http://nodejs.org/docs/latest/api/all.html#util.format).
- */
-Logger.prototype.fatal = function () {
-  var fields = null, msgArgs = null;
-  if (arguments.length === 0) {   // `log.fatal()`
-    return (this._level <= FATAL);
-  } else if (this._level > FATAL) {
-    return;
-  } else if (arguments[0] instanceof Error) {
-    // `log.fatal(err, ...)`
-    fields = {err: errSerializer(arguments[0])};
-    if (arguments.length === 1) {
-      msgArgs = [fields.err.message];
-    } else {
-      msgArgs = Array.prototype.slice.call(arguments, 1);
-    }
-  } else if (typeof (arguments[0]) === 'string') {  // `log.fatal(msg, ...)`
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-  } else if (Buffer.isBuffer(arguments[0])) {  // `log.fatal(buf, ...)`
-    // Almost certainly an error, show `inspect(buf)`. See bunyan issue #35.
-    fields = null;
-    msgArgs = Array.prototype.slice.call(arguments);
-    msgArgs[0] = util.inspect(msgArgs[0]);
-  } else {  // `log.fatal(fields, msg, ...)`
-    fields = arguments[0];
-    msgArgs = Array.prototype.slice.call(arguments, 1);
-  }
-  var rec = this._mkRecord(fields, FATAL, msgArgs);
-  this._emit(rec);
-}
+Logger.prototype.trace = mkLogEmitter(TRACE);
+Logger.prototype.debug = mkLogEmitter(DEBUG);
+Logger.prototype.info = mkLogEmitter(INFO);
+Logger.prototype.warn = mkLogEmitter(WARN);
+Logger.prototype.error = mkLogEmitter(ERROR);
+Logger.prototype.fatal = mkLogEmitter(FATAL);
 
 
 
@@ -961,30 +840,30 @@ Logger.stdSerializers = {};
 
 // Serialize an HTTP request.
 Logger.stdSerializers.req = function req(req) {
-  if (!req || !req.connection)
-    return req;
-  return {
-    method: req.method,
-    url: req.url,
-    headers: req.headers,
-    remoteAddress: req.connection.remoteAddress,
-    remotePort: req.connection.remotePort
-  };
-  // Trailers: Skipping for speed. If you need trailers in your app, then
-  // make a custom serializer.
-  //if (Object.keys(trailers).length > 0) {
-  //  obj.trailers = req.trailers;
-  //}
+    if (!req || !req.connection)
+        return req;
+    return {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        remoteAddress: req.connection.remoteAddress,
+        remotePort: req.connection.remotePort
+    };
+    // Trailers: Skipping for speed. If you need trailers in your app, then
+    // make a custom serializer.
+    //if (Object.keys(trailers).length > 0) {
+    //  obj.trailers = req.trailers;
+    //}
 };
 
 // Serialize an HTTP response.
 Logger.stdSerializers.res = function res(res) {
-  if (!res || !res.statusCode)
-    return res;
-  return {
-    statusCode: res.statusCode,
-    header: res._header
-  }
+    if (!res || !res.statusCode)
+        return res;
+    return {
+        statusCode: res.statusCode,
+        header: res._header
+    }
 };
 
 
@@ -999,50 +878,295 @@ Logger.stdSerializers.res = function res(res) {
  */
 function getFullErrorStack(ex)
 {
-  var ret = ex.stack || ex.toString();
-  if (ex.cause && typeof(ex.cause) === 'function') {
-    var cex = ex.cause();
-    if (cex) {
-      ret += '\nCaused by: ' + getFullErrorStack(cex);
+    var ret = ex.stack || ex.toString();
+    if (ex.cause && typeof (ex.cause) === 'function') {
+        var cex = ex.cause();
+        if (cex) {
+            ret += '\nCaused by: ' + getFullErrorStack(cex);
+        }
     }
-  }
-  return (ret);
+    return (ret);
 }
 
 // Serialize an Error object
 // (Core error properties are enumerable in node 0.4, not in 0.6).
 var errSerializer = Logger.stdSerializers.err = function err(err) {
-  if (!err || !err.stack)
-    return err;
-  var obj = {
-    message: err.message,
-    name: err.name,
-    stack: getFullErrorStack(err)
-  }
-  Object.keys(err).forEach(function (k) {
-    if (err[k] !== undefined) {
-      obj[k] = err[k];
+    if (!err || !err.stack)
+        return err;
+    var obj = {
+        message: err.message,
+        name: err.name,
+        stack: getFullErrorStack(err),
+        code: err.code,
+        signal: err.signal
     }
-  });
-  return obj;
+    return obj;
 };
 
 
 // A JSON stringifier that handles cycles safely.
 // Usage: JSON.stringify(obj, safeCycles())
 function safeCycles() {
-  var seen = [];
-  return function(key, val) {
-    if (!val || typeof val !== 'object') {
-      return val;
-    }
-    if (seen.indexOf(val) !== -1) {
-      return '[Circular]';
-    }
-    seen.push(val);
-    return val;
-  };
+    var seen = [];
+    return function (key, val) {
+        if (!val || typeof (val) !== 'object') {
+            return val;
+        }
+        if (seen.indexOf(val) !== -1) {
+            return '[Circular]';
+        }
+        seen.push(val);
+        return val;
+    };
 }
+
+
+/**
+ * XXX
+ */
+if (mv) {
+
+function RotatingFileStream(options) {
+    this.path = options.path;
+    this.stream = fs.createWriteStream(this.path,
+        {flags: 'a', encoding: 'utf8'});
+    this.count = (options.count == null ? 10 : options.count);
+    assert.ok(typeof (this.count) === 'number' && this.count >= 0);
+
+    // Parse `options.period`.
+    if (options.period) {
+        // <number><scope> where scope is:
+        //    h   hours (at the start of the hour)
+        //    d   days (at the start of the day, i.e. just after midnight)
+        //    w   weeks (at the start of Sunday)
+        //    m   months (on the first of the month)
+        //    y   years (at the start of Jan 1st)
+        // with special values 'hourly' (1h), 'daily' (1d), "weekly" (1w),
+        // 'monthly' (1m) and 'yearly' (1y)
+        var period = {
+            'hourly': '1h',
+            'daily': '1d',
+            'weekly': '1w',
+            'monthly': '1m',
+            'yearly': '1y'
+        }[options.period] || options.period;
+        var m = /^([1-9][0-9]*)([hdwmy]|ms)$/.exec(period);
+        if (!m) {
+            throw new Error(format('invalid period: "%s"', options.period));
+        }
+        this.periodNum = Number(m[1]);
+        this.periodScope = m[2];
+    } else {
+        this.periodNum = 1;
+        this.periodScope = 'd';
+    }
+
+    // TODO: template support for backup files
+    // template: <path to which to rotate>
+    //      default is %P.%n
+    //      '/var/log/archive/foo.log'  -> foo.log.%n
+    //      '/var/log/archive/foo.log.%n'
+    //      codes:
+    //          XXX support strftime codes (per node version of those)
+    //              or whatever module. Pick non-colliding for extra
+    //              codes
+    //          %P      `path` base value
+    //          %n      integer number of rotated log (1,2,3,...)
+    //          %d      datetime in YYYY-MM-DD_HH-MM-SS
+    //                      XXX what should default date format be?
+    //                          prior art? Want to avoid ':' in
+    //                          filenames (illegal on Windows for one).
+
+    this.rotQueue = [];
+    this.rotating = false;
+    this._setupNextRot();
+}
+
+util.inherits(RotatingFileStream, EventEmitter);
+
+RotatingFileStream.prototype._setupNextRot = function () {
+    var self = this;
+    this.rotAt = this._nextRotTime();
+    this.timeout = setTimeout(
+        function () { self.rotate(); },
+        this.rotAt - Date.now());
+}
+
+RotatingFileStream.prototype._nextRotTime = function _nextRotTime(first) {
+    var _DEBUG = false;
+    if (_DEBUG)
+        console.log('-- _nextRotTime: %s%s', this.periodNum, this.periodScope);
+    var d = new Date();
+
+    if (_DEBUG) console.log('  now local: %s', d);
+    if (_DEBUG) console.log('    now utc: %s', d.toISOString());
+    var rotAt;
+    switch (this.periodScope) {
+    case 'ms':
+        // Hidden millisecond period for debugging.
+        if (this.rotAt) {
+            rotAt = this.rotAt + this.periodNum;
+        } else {
+            rotAt = Date.now() + this.periodNum;
+        }
+        break;
+    case 'h':
+        if (this.rotAt) {
+            rotAt = this.rotAt + this.periodNum * 60 * 60 * 1000;
+        } else {
+            // First time: top of the next hour.
+            rotAt = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(),
+                d.getUTCDate(), d.getUTCHours() + 1);
+        }
+        break;
+    case 'd':
+        if (this.rotAt) {
+            rotAt = this.rotAt + this.periodNum * 24 * 60 * 60 * 1000;
+        } else {
+            // First time: start of tomorrow (i.e. at the coming midnight) UTC.
+            rotAt = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(),
+                d.getUTCDate() + 1);
+        }
+        break;
+    case 'w':
+        // Currently, always on Sunday morning at 00:00:00 (UTC).
+        if (this.rotAt) {
+            rotAt = this.rotAt + this.periodNum * 7 * 24 * 60 * 60 * 1000;
+        } else {
+            // First time: this coming Sunday.
+            rotAt = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(),
+                d.getUTCDate() + (7 - d.getUTCDay()));
+        }
+        break;
+    case 'm':
+        if (this.rotAt) {
+            rotAt = Date.UTC(d.getUTCFullYear(),
+                d.getUTCMonth() + this.periodNum, 1);
+        } else {
+            // First time: the start of the next month.
+            rotAt = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+        }
+        break;
+    case 'y':
+        if (this.rotAt) {
+            rotAt = Date.UTC(d.getUTCFullYear() + this.periodNum, 0, 1);
+        } else {
+            // First time: the start of the next year.
+            rotAt = Date.UTC(d.getUTCFullYear() + 1, 0, 1);
+        }
+        break;
+    default:
+        assert.fail(format('invalid period scope: "%s"', this.periodScope));
+    }
+
+    if (_DEBUG) {
+        console.log('  **rotAt**: %s (utc: %s)', rotAt,
+            new Date(rotAt).toUTCString());
+        var now = Date.now();
+        console.log('        now: %s (%sms == %smin == %sh to go)',
+            now,
+            rotAt - now,
+            (rotAt-now)/1000/60,
+            (rotAt-now)/1000/60/60);
+    }
+    return rotAt;
+};
+
+RotatingFileStream.prototype.rotate = function rotate() {
+    // XXX What about shutdown?
+    var self = this;
+    var _DEBUG = false;
+
+    if (_DEBUG) console.log('-- [%s] rotating %s', new Date(), self.path);
+    if (self.rotating) {
+        throw new TypeError('cannot start a rotation when already rotating');
+    }
+    self.rotating = true;
+
+    self.stream.end();  // XXX can do moves sync after this? test at high rate
+
+    function del() {
+        var toDel = self.path + '.' + String(n - 1);
+        if (n === 0) {
+            toDel = self.path;
+        }
+        n -= 1;
+        if (_DEBUG) console.log('rm %s', toDel);
+        fs.unlink(toDel, function (delErr) {
+            //XXX handle err other than not exists
+            moves();
+        });
+    }
+
+    function moves() {
+        if (self.count === 0 || n < 0) {
+            return finish();
+        }
+        var before = self.path;
+        var after = self.path + '.' + String(n);
+        if (n > 0) {
+            before += '.' + String(n - 1);
+        }
+        n -= 1;
+        fs.exists(before, function (exists) {
+            if (!exists) {
+                moves();
+            } else {
+                if (_DEBUG) console.log('mv %s %s', before, after);
+                mv(before, after, function (mvErr) {
+                    if (mvErr) {
+                        self.emit('error', mvErr);
+                        finish(); // XXX finish here?
+                    } else {
+                        moves();
+                    }
+                });
+            }
+        })
+    }
+
+    function finish() {
+        if (_DEBUG) console.log('open %s', self.path);
+        self.stream = fs.createWriteStream(self.path,
+            {flags: 'a', encoding: 'utf8'});
+        var q = self.rotQueue, len = q.length;
+        for (var i = 0; i < len; i++) {
+            self.stream.write(q[i]);
+        }
+        self.rotQueue = [];
+        self.rotating = false;
+        self.emit('drain');
+        self._setupNextRot();
+    }
+
+    var n = this.count;
+    del();
+};
+
+RotatingFileStream.prototype.write = function write(s) {
+    if (this.rotating) {
+        this.rotQueue.push(s);
+        return false;
+    } else {
+        return this.stream.write(s);
+    }
+};
+
+RotatingFileStream.prototype.end = function end(s) {
+    this.stream.end();
+};
+
+RotatingFileStream.prototype.destroy = function destroy(s) {
+    this.stream.destroy();
+};
+
+RotatingFileStream.prototype.destroySoon = function destroySoon(s) {
+    this.stream.destroySoon();
+};
+
+} /* if (mv) */
+
+
 
 /**
  * RingBuffer is a Writable Stream that just stores the last N records in
@@ -1053,39 +1177,39 @@ function safeCycles() {
  *    - limit: number of records to keep in memory
  */
 function RingBuffer(options) {
-  this.limit = options && options.limit ? options.limit : 100;
-  this.writable = true;
-  this.records = [];
-  EventEmitter.call(this);
+    this.limit = options && options.limit ? options.limit : 100;
+    this.writable = true;
+    this.records = [];
+    EventEmitter.call(this);
 }
 
 util.inherits(RingBuffer, EventEmitter);
 
 RingBuffer.prototype.write = function (record) {
-  if (!this.writable)
-    throw (new Error('RingBuffer has been ended already'));
+    if (!this.writable)
+        throw (new Error('RingBuffer has been ended already'));
 
-  this.records.push(record);
+    this.records.push(record);
 
-  if (this.records.length > this.limit)
-    this.records.shift();
+    if (this.records.length > this.limit)
+        this.records.shift();
 
-  return (true);
+    return (true);
 };
 
 RingBuffer.prototype.end = function () {
-  if (arguments.length > 0)
-    this.write.apply(this, Array.prototype.slice.call(arguments));
-  this.writable = false;
+    if (arguments.length > 0)
+        this.write.apply(this, Array.prototype.slice.call(arguments));
+    this.writable = false;
 };
 
 RingBuffer.prototype.destroy = function () {
-  this.writable = false;
-  this.emit('close');
+    this.writable = false;
+    this.emit('close');
 };
 
 RingBuffer.prototype.destroySoon = function () {
-  this.destroy();
+    this.destroy();
 };
 
 
@@ -1105,7 +1229,12 @@ module.exports.VERSION = VERSION;
 module.exports.LOG_VERSION = LOG_VERSION;
 
 module.exports.createLogger = function createLogger(options) {
-  return new Logger(options);
+    return new Logger(options);
 };
 
 module.exports.RingBuffer = RingBuffer;
+
+// Useful for custom `type == 'raw'` streams that may do JSON stringification
+// of log records themselves. Usage:
+//    var str = JSON.stringify(rec, bunyan.safeCycles());
+module.exports.safeCycles = safeCycles;
