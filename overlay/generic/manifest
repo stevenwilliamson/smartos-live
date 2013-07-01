@@ -22,6 +22,7 @@ f etc/notices/COPYRIGHT 0444 root sys
 f etc/name_to_major 0644 root sys
 f etc/nsswitch.conf 0644 root sys
 f etc/passwd 0644 root sys
+f etc/profile 0644 root sys
 f etc/nodename 0644 root root
 d etc/svc 0755 root sys
 d etc/svc/profile 0755 root sys
@@ -157,5 +158,6 @@ f lib/svc/manifest/network/nfs/server.xml 0444 root sys
 f lib/svc/manifest/network/nfs/status.xml 0444 root sys
 d var/db 0755 root bin
 d var/db/imgadm 0755 root bin
+d var/fw 0755 root bin
 d var/log 0755 root sys
 d var/log/vm 0755 root sys
