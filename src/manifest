@@ -396,7 +396,6 @@ d usr/node/0.8/node_modules 0555 root bin
 f usr/node/0.8/node_modules/zookeeper_native.node 0444 root bin
 f usr/node/0.8/node_modules/onlyif.js 0444 root bin
 f usr/node/0.8/node_modules/sprintf.js 0444 root bin
-f usr/node/0.8/node_modules/syslog.node 0444 root bin
 f usr/node/0.8/node_modules/system.js 0444 root bin
 f usr/node/0.8/node_modules/zookeeper.js 0444 root bin
 f usr/node/0.8/node_modules/underscore.js 0444 root bin
