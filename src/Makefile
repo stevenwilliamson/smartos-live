@@ -357,7 +357,7 @@ install: all
 	mkdir -m 0755 -p $(PREFIX_NODE)/node_modules
 	cp -Pr node_modules/* $(PREFIX_NODE)/node_modules
 	cp $(KSTAT.NODE) $(PREFIX_NODE)/node_modules/
-	cp $(ZOOKEEPER.NODE) $(PREFIX_NODE)/node_modules/
+	cp $(ZOOKEEPER.NODE) $(PREFIX_NODE)/node_modules/zookeeper_native.node
 	cp $(MICROTIME.NODE) $(PREFIX_NODE)/node_modules/
 	rm -rf $(DESTDIR)/usr/vm
 	cp -PR vm $(DESTDIR)/usr/
@@ -541,7 +541,7 @@ $(ZOOKEEPER_OBJDIR)/zk/lib/libzookeeper_st.a:
 	(cd node-zookeeper/zk_c && \
 		CFLAGS='-pthread -D_POSIX_PTHREAD_SEMANTICS' LDFLAGS='-lnsl -lsocket' ./configure --without-syncapi --without-shared --disable-shared --with-pic --prefix=/usr && \
 		make clean install )
-	
+
 $(ZOOKEEPER.NODE): node-zookeeper/src/node-zk.cpp $(ZOOKEEPER_OBJDIR)/zk/lib/libzookeeper_st.a
 	@mkdir -p $(ZOOKEEPER_OBJDIR)
 	$(GXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
