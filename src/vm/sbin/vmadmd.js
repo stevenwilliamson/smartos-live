@@ -1659,43 +1659,41 @@ function upgradeVM(vmobj, fields, callback)
                 );
             });
         }, function (cb) {
+            var args;
+            var d;
+
             if (vmobj.brand !== 'kvm') {
                 cb();
                 return;
             }
 
-            if (!vmobj.disks) {
+            if (!vmobj.disks || vmobj.disks.length < 1) {
                 cb(new Error('KVM VM ' + vmobj.uuid + ' is missing disks'));
                 return;
             }
 
             log.info(JSON.stringify(vmobj.disks));
+            d = vmobj.disks[0];
 
-            async.eachSeries(vmobj.disks, function (d, c) {
-                var args;
+            if (d.size) {
+                args = ['set', 'refreservation=' + d.size + 'M',
+                    d.zfs_filesystem];
+                zfs(args, function (err, fds) {
+                    if (err) {
+                        log.error(err);
+                        cb(err);
+                        return;
+                    }
 
-                if (d.size) {
-                    args = ['set', 'refreservation=' + d.size + 'M',
-                        d.zfs_filesystem];
-                    zfs(args, function (err, fds) {
-                        if (err) {
-                            log.error(err);
-                            c(err);
-                            return;
-                        }
-
-                        log.info('set refreservation=' + d.size + 'M for '
-                            + d.zfs_filesystem);
-                        c();
-                    });
-                } else {
-                    log.warn('VM ' + vmobj.uuid + ' has no d.size on disk: '
-                        + JSON.stringify(d));
-                    c();
-                }
-            }, function (err) {
-                cb(err);
-            });
+                    log.info('set refreservation=' + d.size + 'M for '
+                        + d.zfs_filesystem);
+                    cb();
+                });
+            } else {
+                log.warn('VM ' + vmobj.uuid + ' has no d.size on disk: '
+                    + JSON.stringify(d));
+                cb();
+            }
         }, function (cb) {
             var default_gateway;
             var primary_nic;
@@ -1777,6 +1775,48 @@ function upgradeVM(vmobj, fields, callback)
                 upgrade_payload.quota = 10;
             }
             cb();
+        }, function (cb) {
+            if (vmobj.hasOwnProperty('create_timestamp')) {
+                cb();
+                return;
+            }
+            log.info('no create_timestamp, reading from creation time of '
+                + vmobj.zfs_filesystem);
+            zfs(['get', '-pHo', 'value', 'creation', vmobj.zfs_filesystem],
+                function (err, fds) {
+
+                var creation_timestamp = trim(fds.stdout);
+
+                if (!err && !creation_timestamp) {
+                    err = new Error('Unable to find creation timestamp in zfs '
+                        + 'output');
+                }
+
+                if (err) {
+                    log.error(err, 'failed to load zoneroot for creation time');
+                    cb(err);
+                    return;
+                }
+
+                creation_timestamp =
+                    (new Date(creation_timestamp * 1000)).toISOString();
+
+                log.info('creation time: ' + creation_timestamp + ' from ZFS');
+
+                zonecfg(['-z', vmobj.zonename, 'add attr; '
+                    + 'set name=create-timestamp; set type=string; '
+                    + 'set value="' + creation_timestamp + '"; end'],
+                    function (zcfg_err, zcfg_fds) {
+                        if (zcfg_err) {
+                            log.error(zcfg_err);
+                            cb(zcfg_err);
+                            return;
+                        }
+                        log.info('set create-timestamp: ' + creation_timestamp);
+                        cb();
+                    }
+                );
+            });
         }, function (cb) {
             // in SDC7 *_pw keys do not work in customer_metadata and must be in
             // internal_metadata.
@@ -1912,6 +1952,7 @@ function main()
             lookup_fields = [
                 'autoboot',
                 'brand',
+                'create_timestamp',
                 'customer_metadata',
                 'default_gateway',
                 'disks',

@@ -87,6 +87,10 @@ f usr/img/node_modules/nopt/node_modules/abbrev/lib/abbrev.js 0444 root bin
 f usr/img/node_modules/nopt/node_modules/abbrev/LICENSE 0444 root bin
 f usr/img/node_modules/nopt/node_modules/abbrev/package.json 0444 root bin
 f usr/img/node_modules/nopt/package.json 0444 root bin
+d usr/img/node_modules/once 0555 root bin
+f usr/img/node_modules/once/LICENSE 0444 root bin
+f usr/img/node_modules/once/once.js 0444 root bin
+f usr/img/node_modules/once/package.json 0444 root bin
 d usr/img/node_modules/progbar 0555 root bin
 d usr/img/node_modules/progbar/lib 0555 root bin
 f usr/img/node_modules/progbar/lib/progbar.js 0444 root bin
@@ -177,10 +181,6 @@ d usr/img/node_modules/sdc-clients/node_modules/node-uuid 0555 root bin
 f usr/img/node_modules/sdc-clients/node_modules/node-uuid/LICENSE.md 0444 root bin
 f usr/img/node_modules/sdc-clients/node_modules/node-uuid/package.json 0444 root bin
 f usr/img/node_modules/sdc-clients/node_modules/node-uuid/uuid.js 0444 root bin
-d usr/img/node_modules/sdc-clients/node_modules/once 0555 root bin
-f usr/img/node_modules/sdc-clients/node_modules/once/LICENSE 0444 root bin
-f usr/img/node_modules/sdc-clients/node_modules/once/once.js 0444 root bin
-f usr/img/node_modules/sdc-clients/node_modules/once/package.json 0444 root bin
 d usr/img/node_modules/sdc-clients/node_modules/restify 0555 root bin
 d usr/img/node_modules/sdc-clients/node_modules/restify/lib 0555 root bin
 f usr/img/node_modules/sdc-clients/node_modules/restify/lib/bunyan_helper.js 0444 root bin
@@ -227,6 +227,7 @@ f usr/img/sbin/imgadm 0555 root bin
 d usr/img/test 0555 root bin
 f usr/img/test/basics.test.js 0444 root bin
 f usr/img/test/create.test.js 0444 root bin
+f usr/img/test/import.test.js 0444 root bin
 f usr/img/test/mk-custom-image 0555 root bin
 f usr/img/test/runtests 0555 root bin
 f usr/img/test/tap4nodeunit.js 0444 root bin
@@ -313,10 +314,12 @@ d usr/fw/node_modules/fwrule 0555 root bin
 d usr/fw/sbin 0555 root bin
 f usr/fw/etc/fwadm.completion 0444 root bin
 f usr/fw/lib/cli.js 0444 root bin
+f usr/fw/lib/filter.js 0444 root bin
 f usr/fw/lib/fw.js 0444 root bin
 f usr/fw/lib/fwadm.js 0444 root bin
 f usr/fw/lib/ipf.js 0444 root bin
 f usr/fw/lib/pipeline.js 0444 root bin
+f usr/fw/lib/rvm.js 0444 root bin
 f usr/fw/lib/util/log.js 0444 root bin
 f usr/fw/lib/util/obj.js 0444 root bin
 f usr/fw/lib/util/vm.js 0444 root bin
@@ -390,9 +393,9 @@ f usr/bin/mkzpool 0555 root bin
 f usr/lib/measure_terminal 0555 root bin
 s usr/sbin/fwadm=../fw/sbin/fwadm
 s usr/sbin/vmadm=../vm/sbin/vmadm
-d usr/node 0555 root bin
-d usr/node/0.8 0555 root bin
-d usr/node/0.8/node_modules 0555 root bin
+d usr/node 0755 root bin
+d usr/node/0.8 0755 root bin
+d usr/node/0.8/node_modules 0755 root bin
 f usr/node/0.8/node_modules/zookeeper_native.node 0444 root bin
 f usr/node/0.8/node_modules/onlyif.js 0444 root bin
 f usr/node/0.8/node_modules/sprintf.js 0444 root bin
@@ -405,6 +408,7 @@ f usr/node/0.8/node_modules/dtrace-provider.js 0444 root bin
 f usr/node/0.8/node_modules/dtrace-provider.node 0444 root bin
 f usr/node/0.8/node_modules/getopt.js 0444 root bin
 f usr/node/0.8/node_modules/kstat.node 0444 root bin
+f usr/node/0.8/node_modules/microtime.node 0444 root bin
 f usr/node/0.8/node_modules/onlyif.js 0444 root bin
 f usr/node/0.8/node_modules/sprintf.js 0444 root bin
 f usr/node/0.8/node_modules/sqlite3.js 0444 root bin
@@ -413,6 +417,7 @@ f usr/node/0.8/node_modules/node_sqlite3.node 0444 root bin
 f usr/node/0.8/node_modules/panic.js 0444 root bin
 f usr/node/0.8/node_modules/subr.js 0444 root bin
 f usr/node/0.8/node_modules/system.js 0444 root bin
+f usr/node/0.8/node_modules/uuid.node 0444 root bin
 f usr/node/0.8/node_modules/zfs.js 0444 root bin
 # 0-man-stamp
 d usr/share/man/man3m 0755 root bin

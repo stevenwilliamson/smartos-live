@@ -737,6 +737,21 @@ tab-complete UUIDs rather than having to type them out for every command.
         update: yes (special, see description in 'update' section above)
         default: no
 
+    disks.*.compression:
+
+        Specifies a compression algorithm used for this disk. This has the same
+        details, warnings and caveats as the global zfs_root_compression option
+        below but only affects a single disk on the VM.
+
+        See zfs_root_compression section below for more details.
+
+        type: string one of: "on,off,lzjb,gzip,gzip-N,zle"
+        vmtype: KVM
+        listable: no
+        create: yes
+        update: yes (see caveat in zfs_root_compression section below)
+        default: off
+
     disks.*.nocreate:
 
         This parameter indicates whether or not the disk should be created. It
@@ -792,6 +807,19 @@ tab-complete UUIDs rather than having to type them out for every command.
         update: yes (special, see description in 'update' section above)
         default: no
 
+    disks.*.refreservation:
+
+        Specifies a refreservation for this disk. This property controls the
+        minimum amount of space reserved for a given disk.  See also the zfs(1)
+        man page's description of refreservation.
+
+        type: integer number of MiB
+        vmtype: KVM
+        listable: no
+        create: yes
+        update: yes (special, see description in 'update' section above)
+        default: size of the disk
+
     disks.*.size:
 
         Size of disk in MiB. You should only specify this parameter if you've
@@ -832,21 +860,6 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: yes (special, see description in 'update' section above)
         default: the value of the disk_driver parameter for this VM
-
-    disks.*.compression:
-
-        Specifies a compression algorithm used for this disk. This has the same
-        details, warnings and caveats as the global zfs_root_compression option
-        below but only affects a single disk on the VM.
-
-        See zfs_root_compression section below for more details.
-
-        type: string one of: "on,off,lzjb,gzip,gzip-N,zle"
-        vmtype: KVM
-        listable: no
-        create: yes
-        update: yes (see caveat in zfs_root_compression section below)
-        default: off
 
     disks.*.zpool:
 
@@ -901,12 +914,12 @@ tab-complete UUIDs rather than having to type them out for every command.
     filesystems:
 
         This property can be used to mount additional filesystems into an OS
-        VM. It is primarily intended for SDC special VMs.  The value is an
-        array of objects. Those objects can have the following properties:
-        source, target, raw (optional), type and options.  These are described
-        below:
+        VM. It is primarily intended for SDC special VMs. The value is an
+        array of objects. The properties available are listed below under the 
+        filesystems.*.<property> options. Those objects can have the following
+        properties: source, target, raw (optional), type and options.
 
-    filesystem.type:
+    filesystems.*.type:
 
         For OS VMs this specifies the type of the filesystem being mounted in.
         Example: lofs
@@ -917,7 +930,7 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: no
 
-    filesystem.source:
+    filesystems.*.source:
 
         For OS VMs this specifies the directory in the global zone of the
         filesystem being mounted in.  Example: /pool/somedirectory
@@ -928,7 +941,7 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: no
 
-    filesystem.target:
+    filesystems.*.target:
 
         For OS VMs this specifies the directory inside the Zone where this
         filesystem should be mounted.  Example: /somedirectory
@@ -939,7 +952,7 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: no
 
-    filesystem.raw:
+    filesystems.*.raw:
 
         For OS VMs this specifies the additional raw device that should be
         associated with the source filesystem.  Example: /dev/rdsk/somedisk
@@ -950,7 +963,7 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: no
 
-    filesystem.options:
+    filesystems.*.options:
 
         For OS VMs this specifies the array of mount options for this file
         system when it is mounted into the zone.  Examples of options include:
@@ -1197,9 +1210,10 @@ tab-complete UUIDs rather than having to type them out for every command.
 
         This sets additional IP addresses from which this nic is allowed to
         send traffic, in addition to the IPs in the ip and vrrp_primary_ip
-        properties (if set).
+        properties (if set). Values can be either single IPv4 Addresses or
+        CIDR ranges in the form 192.168.1.0/24.
 
-        type: array (of IP addresses)
+        type: array (of IP addresses or CIDR ranges)
         vmtype: OS,KVM
         listable: yes (see above)
         create: yes

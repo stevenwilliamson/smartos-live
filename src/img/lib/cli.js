@@ -244,7 +244,7 @@ function CLI() {
  * By default a single line for an error is printed:
  *      imgadm: error (UnknownCommand): unknown command: "bogus"
  *
- * With one or more '-v' options a traceback is printed:
+ * With the '-v, --verbose' option a traceback is printed:
  *      imgadm: error (UnknownCommand): unknown command: "bogus"
  *
  *      UnknownCommandError: unknown command: "bogus"
@@ -315,10 +315,8 @@ CLI.prototype.main = function main(argv, options, callback) {
          * - If no `options.log` is given, we log to stderr.
          * - By default we log at the 'warn' level. Intentionally that is
          *   almost no logging
-         * - '-v|--verbose' to increase the logging level:
-         *      - 1: info
-         *      - 2: debug
-         *      - 3: trace and enable 'src' (source file location information)
+         * - '-v|--verbose' to set to trace and enable 'src' (source file
+         *   location information)
          * - '-E' to have a possible error be logged as the last single line
          *   of stderr as a Bunyan log record with an 'err'. I.e. in a
          *   structured format more useful to automation tooling.
@@ -327,7 +325,7 @@ CLI.prototype.main = function main(argv, options, callback) {
          * `bunyan` for readable output (at least until bunyan.js supports
          * doing it inline). Admittedly this is a bit of a pain:
          *
-         *      imgadm -vvv ... 2>&1 | bunyan
+         *      imgadm -v ... 2>&1 | bunyan
          */
         var log = options.log || bunyan.createLogger({
             name: self.name,
@@ -340,16 +338,8 @@ CLI.prototype.main = function main(argv, options, callback) {
             serializers: bunyan.stdSerializers
         });
         if (opts.verbose) {
-            var level;
-            if (opts.verbose.length === 1) {
-                level = 'info';
-            } else if (opts.verbose.length === 2) {
-                level = 'debug';
-            } else {
-                level = 'trace';
-                log = log.child({src: true});
-            }
-            log.level(level);
+            log = log.child({src: true});
+            log.level('trace');
         }
         self.log = log;
         self.verbose = Boolean(opts.verbose);
@@ -413,7 +403,7 @@ CLI.prototype.handleArgv = function handleArgv(argv, envopts, callback) {
     var longOpts = this.longOpts = {
         'help': Boolean,
         'version': Boolean,
-        'verbose': [Boolean, Array],
+        'verbose': Boolean,
         'E': Boolean
     };
     var shortOpts = this.shortOpts = {
@@ -453,7 +443,7 @@ CLI.prototype.printHelp = function printHelp(callback) {
         'Options:',
         '    -h, --help          Show this help message and exit.',
         '    --version           Show version and exit.',
-        '    -v, --verbose       Verbose logging. Multiple times for more.'
+        '    -v, --verbose       Verbose logging.'
     ]);
 
     if (self.envopts && self.envopts.length) {
@@ -1144,7 +1134,8 @@ CLI.prototype.do_import = function do_import(subcmd, opts, args, callback) {
                 manifest: imageInfo.manifest,
                 source: imageInfo.source,
                 zpool: zpool,
-                quiet: opts.quiet
+                quiet: opts.quiet,
+                logCb: console.log
             };
             self.tool.importImage(importOpts, function (importErr) {
                 if (importErr) {
@@ -1249,7 +1240,8 @@ CLI.prototype.do_install = function do_install(subcmd, opts, args, callback) {
         var installOpts = {
             manifest: manifest,
             zpool: zpool,
-            file: opts.file
+            file: opts.file,
+            logCb: console.log
         };
         self.tool.installImage(installOpts, function (installErr) {
             if (installErr) {
@@ -1319,7 +1311,7 @@ CLI.prototype.do_update.description = (
 
 
 /**
- * `imgadm create [<options>] <uuid> [<manifest-field>=<value> ...]`
+ * `imgadm create [<options>] <vm-uuid> [<manifest-field>=<value> ...]`
  */
 CLI.prototype.do_create = function do_create(subcmd, opts, args, callback) {
     var self = this;
@@ -1329,8 +1321,8 @@ CLI.prototype.do_create = function do_create(subcmd, opts, args, callback) {
             args.length, args.join(' '))));
         return;
     }
-    var uuid = args[0];
-    assertUuid(uuid);
+    var vmUuid = args[0];
+    assertUuid(vmUuid);
     if (opts.compression
         && !~common.VALID_COMPRESSIONS.indexOf(opts.compression))
     {
@@ -1429,9 +1421,10 @@ CLI.prototype.do_create = function do_create(subcmd, opts, args, callback) {
         }
 
         var createOpts = {
-            uuid: uuid,
+            vmUuid: vmUuid,
             manifest: manifest,
             compression: opts.compression,
+            incremental: opts.incremental,
             savePrefix: savePrefix,
             logCb: console.log,
             quiet: opts.quiet
@@ -1470,8 +1463,7 @@ CLI.prototype.do_create = function do_create(subcmd, opts, args, callback) {
 };
 CLI.prototype.do_create.description = (
     /* BEGIN JSSTYLED */
-    '**Experimental. This command currently does not work on KVM zones.**\n'
-    + 'Create a new image from a prepared and stopped VM.\n'
+    'Create a new image from a prepared and stopped VM.\n'
     + '\n'
     + 'To create a new virtual image, one first creates a VM from an existing\n'
     + 'image, customizes it, runs "sm-prepare-image", shuts it down, and\n'
@@ -1483,7 +1475,7 @@ CLI.prototype.do_create.description = (
     + 'done separately via "imgadm publish").\n'
     + '\n'
     + 'Usage:\n'
-    + '    $NAME create [<options>] <uuid> [<manifest-field>=<value> ...]\n'
+    + '    $NAME create [<options>] <vm-uuid> [<manifest-field>=<value> ...]\n'
     + '\n'
     + 'Options:\n'
     + '    -h, --help     Print this help and exit.\n'
@@ -1500,6 +1492,8 @@ CLI.prototype.do_create.description = (
     + '                   created.\n'
     + '    -c COMPRESSION One of "none", "gz" or "bzip2" for the compression\n'
     + '                   to use on the image file, if any. Default is "none".\n'
+    + '    -i             Build an incremental image (based on the "@final"\n'
+    + '                   snapshot of the source image for the VM).\n'
     + '\n'
     + '    -p URL, --publish URL\n'
     + '                   Publish directly to the given image source\n'
@@ -1542,6 +1536,7 @@ CLI.prototype.do_create.longOpts = {
     'manifest': String,
     'compression': String,
     'output-template': String,
+    'incremental': Boolean,
     'publish': String,
     'quiet': Boolean
 };
@@ -1549,6 +1544,7 @@ CLI.prototype.do_create.shortOpts = {
     'm': ['--manifest'],
     'c': ['--compression'],
     'o': ['--output-template'],
+    'i': ['--incremental'],
     'p': ['--publish'],
     'q': ['--quiet']
 };

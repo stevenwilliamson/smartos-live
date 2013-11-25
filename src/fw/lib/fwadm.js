@@ -61,15 +61,20 @@ var OPTS = {
         type: 'string',
         help: 'Input file.'
     },
+    help: {
+        names: ['help', 'h'],
+        type: 'bool',
+        help: 'Print help and exit.'
+    },
     json: {
         names: ['json', 'j'],
         type: 'bool',
         help: 'Output JSON.'
     },
-    help: {
-        names: ['help', 'h'],
-        type: 'bool',
-        help: 'Print help and exit.'
+    owner_uuid: {
+        names: ['owner_uuid', 'O'],
+        type: 'string',
+        help: 'Owner UUID'
     },
     stdout: {
         names: ['stdout'],
@@ -103,15 +108,24 @@ function preparePayload(opts, payload) {
         }
     }
 
-    if (opts && opts.enable) {
-        newOpts.rules.forEach(function (r) {
-            r.enabled = true;
-        });
-    }
+    if (opts) {
+        newOpts.dryrun = opts.dryrun || false;
 
-    newOpts.dryrun = (opts && opts.dryrun) || false;
-    if (opts && opts.stdout) {
-        newOpts.filecontents = true;
+        if (opts.enable) {
+            newOpts.rules.forEach(function (r) {
+                r.enabled = true;
+            });
+        }
+
+        if (opts.owner_uuid && newOpts.rules) {
+            newOpts.rules.forEach(function (r) {
+                r.owner_uuid = opts.owner_uuid;
+            });
+        }
+
+        if (opts.stdout) {
+            newOpts.filecontents = true;
+        }
     }
 
     return newOpts;
@@ -138,10 +152,19 @@ function ruleOutput(err, res, opts, action) {
         }
     }
 
-    var out = [util.format('%s rules:', action)];
-    res.rules.forEach(function (r) {
-        out.push(cli.ruleLine(r));
-    });
+    var out = [];
+
+    if (res.rules && res.rules.length !== 0) {
+        out.push(util.format('%s rules:', action));
+        res.rules.forEach(function (r) {
+            out.push(cli.ruleLine(r));
+        });
+    }
+
+    if (res.remoteVMs && res.remoteVMs.length !== 0) {
+        out.push(util.format('%s remote VMs:', action));
+        out = out.concat(res.remoteVMs);
+    }
 
     if (opts && opts.verbose) {
         out.push('');
@@ -166,7 +189,7 @@ function doUpdate(opts, payload, action) {
 
     pipeline({
     funcs: [
-        function vms(_, cb) { VM.lookup({}, { 'full': true }, cb); },
+        function vms(_, cb) { VM.lookup({}, { fields: fw.VM_FIELDS }, cb); },
         function updateRules(state, cb) {
             payload.vms = state.vms;
             return fw.update(payload, cb);
@@ -246,7 +269,7 @@ Fwadm.prototype.do_add = function (subcmd, opts, args, callback) {
     pipeline({
     funcs: [
         function payload(_, cb) { cli.getPayload(opts, args, cb); },
-        function vms(_, cb) { VM.lookup({}, { 'full': true }, cb); },
+        function vms(_, cb) { VM.lookup({}, { fields: fw.VM_FIELDS }, cb); },
         function addRules(state, cb) {
             var addOpts = preparePayload(opts, state.payload);
             addOpts.vms = state.vms;
@@ -265,6 +288,21 @@ Fwadm.prototype.do_list = function (subcmd, opts, args, callback) {
     // XXX: support filtering, sorting
     return fw.list({}, function (err, res) {
         return cli.displayRules(err, res, opts);
+    });
+};
+
+
+/**
+ * Lists remote VMs
+ */
+Fwadm.prototype['do_list-rvms'] = function (subcmd, opts, args, callback) {
+    // XXX: support filtering, sorting
+    return fw.listRVMs({}, function (err, res) {
+        if (err) {
+            return cli.exitWithErr(err, opts);
+        }
+
+        return console.log(cli.json(res));
     });
 };
 
@@ -314,6 +352,22 @@ Fwadm.prototype.do_get = function (subcmd, opts, args, callback) {
 
 
 /**
+ * Gets a remote VM
+ */
+Fwadm.prototype['do_get-rvm'] = function (subcmd, opts, args, callback) {
+    var uuid = cli.validateUUID(args[0]);
+
+    return fw.getRVM({ remoteVM: uuid }, function (err, rvm) {
+        if (err) {
+            return cli.exitWithErr(err, opts);
+        }
+
+        return console.log(cli.json(rvm));
+    });
+};
+
+
+/**
  * Enables or disables firewall rules
  */
 function enableDisable(subcmd, opts, args, callback) {
@@ -354,7 +408,7 @@ Fwadm.prototype.do_delete = function (subcmd, opts, args, callback) {
 
     pipeline({
     funcs: [
-        function vms(_, cb) { VM.lookup({}, { 'full': true }, cb); },
+        function vms(_, cb) { VM.lookup({}, { fields: fw.VM_FIELDS }, cb); },
         function delRules(state, cb) {
             var delOpts = preparePayload(opts);
             delOpts.vms = state.vms;
@@ -368,16 +422,60 @@ Fwadm.prototype.do_delete = function (subcmd, opts, args, callback) {
 
 
 /**
- * Gets the rules that apply to a zone
+ * Deletes a remote VM
  */
-Fwadm.prototype.do_rules = function (subcmd, opts, args, callback) {
+Fwadm.prototype['do_delete-rvm'] = function (subcmd, opts, args, callback) {
+    if (args.length === 0) {
+        return console.error('Must specify remote VMs to delete!');
+    }
+
+    args.forEach(function (uuid) {
+        cli.validateUUID(uuid);
+    });
+
+    pipeline({
+    funcs: [
+        function vms(_, cb) { VM.lookup({}, { fields: fw.VM_FIELDS }, cb); },
+        function delRVMs(state, cb) {
+            var delOpts = preparePayload(opts);
+            delOpts.vms = state.vms;
+            delOpts.rvmUUIDs = args;
+            return fw.del(delOpts, cb);
+        }
+    ]}, function _afterDel(err, results) {
+        return ruleOutput(err, results.state.delRVMs, opts, 'Deleted');
+    });
+};
+
+
+/**
+ * Gets the rules that apply to a remote VM
+ */
+Fwadm.prototype['do_rvm-rules'] = function (subcmd, opts, args, callback) {
     var uuid = cli.validateUUID(args[0]);
-    return VM.lookup({}, { 'full': true }, function (err, vms) {
+    return VM.lookup({}, { fields: fw.VM_FIELDS }, function (err, vms) {
         if (err) {
             return cli.exitWithErr(err, opts);
         }
 
-        return fw.rules({ vm: uuid, vms: vms }, function (err2, res) {
+        return fw.rvmRules({ remoteVM: uuid, vms: vms }, function (err2, res) {
+            return cli.displayRules(err2, res, opts);
+        });
+    });
+};
+
+
+/**
+ * Gets the rules that apply to a zone
+ */
+Fwadm.prototype.do_rules = function (subcmd, opts, args, callback) {
+    var uuid = cli.validateUUID(args[0]);
+    return VM.lookup({}, { fields: fw.VM_FIELDS }, function (err, vms) {
+        if (err) {
+            return cli.exitWithErr(err, opts);
+        }
+
+        return fw.vmRules({ vm: uuid, vms: vms }, function (err2, res) {
             return cli.displayRules(err2, res, opts);
         });
     });
@@ -450,6 +548,31 @@ Fwadm.prototype.do_stats = function (subcmd, opts, args, callback) {
 };
 
 
+/**
+ * Gets the VMs that are affected by a rule
+ */
+Fwadm.prototype.do_vms = function (subcmd, opts, args, callback) {
+    var uuid = cli.validateUUID(args[0]);
+    return VM.lookup({}, { fields: fw.VM_FIELDS }, function (err, vms) {
+        if (err) {
+            return cli.exitWithErr(err, opts);
+        }
+
+        return fw.vms({ rule: uuid, vms: vms }, function (err2, res) {
+            if (err2) {
+                return cli.exitWithErr(err2, opts);
+            }
+
+            if (opts && opts.json) {
+                return console.log(cli.json(res));
+            }
+
+            console.log(res.join('\n'));
+        });
+    });
+};
+
+
 
 // --- Help text and other cmdln options
 
@@ -458,21 +581,26 @@ Fwadm.prototype.do_stats = function (subcmd, opts, args, callback) {
 var HELP = {
     add: 'Add firewall rules or data.',
     delete: 'Deletes a rule.',
+    'delete-rvm': 'Deletes a remote VM.',
     disable: 'Disable a rule.',
     enable: 'Enable a rule.',
     get: 'Get a rule.',
+    'get-rvm': 'Get a remote VM.',
     list: 'List rules.',
+    'list-rvms': 'List remote VMs.',
     rules: 'List rules that apply to a VM.',
+    'rvm-rules': 'List rules that apply to a remote VM.',
     start: 'Starts a VM\'s firewall.',
-    status: 'Get the status of a VM\'s firewall',
-    stats: 'Get rule statistics for a VM\'s firewall',
+    status: 'Get the status of a VM\'s firewall.',
+    stats: 'Get rule statistics for a VM\'s firewall.',
     stop: 'Stops a VM\'s firewall.',
-    update: 'Updates firewall rules or data.'
+    update: 'Updates firewall rules or data.',
+    vms: 'Get the VMs affected by a rule'
 };
 
 var EXTRA_OPTS = {
-    add: [ OPTS.enable, OPTS.file ],
-    update: [ OPTS.enable, OPTS.file ]
+    add: [ OPTS.enable, OPTS.file, OPTS.owner_uuid ],
+    update: [ OPTS.enable, OPTS.file, OPTS.owner_uuid ]
 };
 
 // Help text and options for all commands

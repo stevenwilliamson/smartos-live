@@ -5,6 +5,7 @@ var async = require('/usr/node/node_modules/async');
 var execFile = require('child_process').execFile;
 var test = require('tap').test;
 var VM = require('/usr/vm/node_modules/VM');
+var vmtest = require('../common/vmtest.js');
 
 VM.loglevel = 'DEBUG';
 
@@ -28,12 +29,28 @@ var PAYLOADS = {
                 "interface": "net0",
                 "vlan_id": 0,
                 "gateway": "10.254.254.1",
-                "mac": "01:02:03:04:05:06"
+                "mac": "00:02:03:04:05:06"
+            }
+        ]
+    }, "add_net1": {
+        "add_nics": [
+            {
+                "ip": "10.254.254.253",
+                "netmask": "255.255.255.0",
+                "nic_tag": "external",
+                "interface": "net1",
+                "vlan_id": 0,
+                "gateway": "10.254.254.1",
+                "mac": "02:03:04:05:06:07"
             }
         ]
     }, "remove_net0": {
         "remove_nics": [
-            "01:02:03:04:05:06"
+            "00:02:03:04:05:06"
+        ]
+    }, "remove_net1": {
+        "remove_nics": [
+            "02:03:04:05:06:07"
         ]
     }, "add_net0_and_net1": {
         "add_nics": [
@@ -45,7 +62,7 @@ var PAYLOADS = {
                 "interface": "net0",
                 "vlan_id": 0,
                 "gateway": "10.254.254.1",
-                "mac": "01:02:03:04:05:06"
+                "mac": "00:02:03:04:05:06"
             }, {
                 "model": "virtio",
                 "ip": "10.254.254.253",
@@ -59,9 +76,43 @@ var PAYLOADS = {
         ]
     }, "remove_net0_and_net1": {
         "remove_nics": [
-            "01:02:03:04:05:06",
+            "00:02:03:04:05:06",
             "02:03:04:05:06:07"
         ]
+    }, "add_disk1": {
+        "add_disks": [
+            {"size": 1024}
+        ]
+    }, "create_w_drivers": {
+        "brand": "kvm",
+        "ram": 256,
+        "autoboot": false,
+        "nic_driver": "e1000",
+        "disk_driver": "ide",
+        "alias": "autotest-vm" + process.pid,
+        "nics": [
+            {
+                "model": "virtio",
+                "ip": "10.254.254.254",
+                "netmask": "255.255.255.0",
+                "nic_tag": "external",
+                "gateway": "10.254.254.1",
+                "mac": "00:02:03:04:05:06"
+            }
+        ],
+        "disks": [{"size": 1024, "model": "virtio"}],
+        "do_not_inventory": true
+    }, "add_nic_and_disk_wo_model": {
+        "add_disks": [{"size": 1024}],
+        "add_nics": [{
+            "ip": "10.254.254.253",
+            "netmask": "255.255.255.0",
+            "nic_tag": "external",
+            "interface": "net1",
+            "vlan_id": 253,
+            "gateway": "10.254.254.1",
+            "mac": "02:03:04:05:06:07"
+        }]
     }
 };
 
@@ -120,6 +171,27 @@ test('update disk model', {'timeout': 60000}, function(t) {
                 });
             }
         });
+    });
+});
+
+// Add disk1 w/o model and ensure it gets same model as disk0 (See OS-2363)
+test('add disk1', {'timeout': 60000}, function(t) {
+    VM.update(vm_uuid, PAYLOADS.add_disk1, function (err) {
+        if (err) {
+            t.ok(false, 'error updating VM: ' + err.message);
+            t.end();
+        } else {
+            VM.load(vm_uuid, function (err, obj) {
+                if (err) {
+                    t.ok(false, 'failed reloading VM');
+                } else if (obj.disks.length !== 2) {
+                    t.ok(false, 'VM has ' + obj.disks.length + ' != 2 disks');
+                } else {
+                    t.ok(obj.disks[0].model === obj.disks[1].model, 'models of disk0 and disk1 match [' + obj.disks[0].model + ',' + obj.disks[1].model + ']');
+                }
+                t.end();
+            });
+        }
     });
 });
 
@@ -205,8 +277,49 @@ test('update nic model', {'timeout': 60000}, function(t) {
     });
 });
 
+// Add net1 w/o model and ensure it gets same model as net0 (See OS-2363)
+test('add net1', {'timeout': 60000}, function(t) {
+    VM.update(vm_uuid, PAYLOADS.add_net1, function (err) {
+        if (err) {
+            t.ok(false, 'error updating VM: ' + err.message);
+            t.end();
+        } else {
+            VM.load(vm_uuid, function (err, obj) {
+                if (err) {
+                    t.ok(false, 'failed reloading VM');
+                } else if (obj.nics.length !== 2) {
+                    t.ok(false, 'VM has ' + obj.nics.length + ' != 2 nics');
+                } else {
+                    t.ok(obj.nics[0].model === obj.nics[1].model, 'models of net0 and net1 match [' + obj.nics[0].model + ',' + obj.nics[1].model + ']');
+                }
+                t.end();
+            });
+        }
+    });
+});
+
 test('remove net0', function(t) {
     VM.update(vm_uuid, PAYLOADS.remove_net0, function(err) {
+        if (err) {
+            t.ok(false, 'error updating VM: ' + err.message);
+            t.end();
+        } else {
+            VM.load(vm_uuid, function (err, obj) {
+                if (err) {
+                    t.ok(false, 'failed reloading VM');
+                } else if (obj.nics.length !== 1) {
+                    t.ok(false, 'VM has ' + obj.nics.length + ' != 1 nics');
+                } else {
+                    t.ok(true, 'Successfully removed net0 from VM');
+                }
+                t.end();
+            });
+        }
+    });
+});
+
+test('remove net1', function(t) {
+    VM.update(vm_uuid, PAYLOADS.remove_net1, function(err) {
         if (err) {
             t.ok(false, 'error updating VM: ' + err.message);
             t.end();
@@ -707,12 +820,80 @@ function zfs(args, callback)
     });
 }
 
+test('enable / disable compression', function(t) {
+    VM.load(vm_uuid, function (err, vmobj) {
+        var disk0;
+        var disk1;
+
+        if (err) {
+            t.ok(false, 'error loading VM: ' + err.message);
+            t.end();
+            return;
+        }
+        if (!vmobj.hasOwnProperty('disks') || vmobj.disks.length !== 2) {
+            t.ok(false, 'cannot find disk: ' + vmobj.disks);
+            t.end();
+            return;
+        }
+        disk0 = vmobj.disks[0];
+        disk1 = vmobj.disks[1];
+
+        t.ok(disk0.compression === 'off', 'disk0 has compression off: ' + disk0.compression);
+        t.ok(disk1.compression === 'off', 'disk1 has compression off: ' + disk1.compression);
+        VM.update(vmobj.uuid, {'update_disks': [{path: disk0.path, compression: 'gzip'}, {path: disk1.path, compression: 'gzip'}]}, function (err) {
+            if (err) {
+                t.ok(false, 'VM.update failed to update disks: ' + err.message);
+                t.end();
+                return;
+            }
+
+            VM.load(vm_uuid, function (err, vmobj_disabled) {
+                if (err) {
+                    t.ok(false, 'error loading VM: ' + err.message);
+                    t.end();
+                    return;
+                }
+
+                disk0 = vmobj_disabled.disks[0];
+                disk1 = vmobj_disabled.disks[1];
+
+                t.ok(disk0.compression === 'gzip', 'disk0 has compression=gzip: ' + disk0.compression);
+                t.ok(disk1.compression === 'gzip', 'disk1 has compression=gzip: ' + disk1.compression);
+                VM.update(vmobj.uuid, {'update_disks': [{path: disk0.path, compression: 'off'}, {path: disk1.path, compression: 'off'}]}, function (err) {
+                    if (err) {
+                        t.ok(false, 'VM.update failed to update disks: ' + err.message);
+                        t.end();
+                        return;
+                    }
+
+                    VM.load(vm_uuid, function (err, vmobj_enabled) {
+                        if (err) {
+                            t.ok(false, 'error loading VM: ' + err.message);
+                            t.end();
+                            return;
+                        }
+
+                        disk0 = vmobj_enabled.disks[0];
+                        disk1 = vmobj_enabled.disks[1];
+
+                        t.ok(disk0.compression === 'off', 'disk0 has compression=off: ' + disk0.compression);
+                        t.ok(disk1.compression === 'off', 'disk1 has compression=off: ' + disk1.compression);
+
+                        t.end();
+                    });
+                });
+            });
+        });
+    });
+});
+
 // VM should at this point be running, so removing the disk should fail.
 // Stopping and removing should succeed.
 // Adding should also succeed at that point.
-test('remove disk', function(t) {
+test('remove disks', function(t) {
     VM.load(vm_uuid, function (err, vmobj) {
-        var disk;
+        var disk0;
+        var disk1;
 
         if (err) {
             t.ok(false, 'error loading VM: ' + err.message);
@@ -724,14 +905,16 @@ test('remove disk', function(t) {
             t.end();
             return;
         }
-        if (!vmobj.hasOwnProperty('disks') || vmobj.disks.length !== 1) {
+        if (!vmobj.hasOwnProperty('disks') || vmobj.disks.length !== 2) {
             t.ok(false, 'cannot find disk: ' + vmobj.disks);
             t.end();
             return;
         }
-        disk = vmobj.disks[0];
-        t.ok(disk.hasOwnProperty('path'), 'disk has a path: ' + disk.path);
-        VM.update(vmobj.uuid, {'remove_disks': [disk.path]}, function (err) {
+        disk0 = vmobj.disks[0];
+        disk1 = vmobj.disks[1];
+        t.ok(disk0.hasOwnProperty('path'), 'disk0 has a path: ' + disk0.path);
+        t.ok(disk1.hasOwnProperty('path'), 'disk1 has a path: ' + disk1.path);
+        VM.update(vmobj.uuid, {'remove_disks': [disk0.path, disk1.path]}, function (err) {
             // expect an error
             t.ok(err, 'VM.update failed to remove disks: ' + (err ? err.message : err));
             if (!err) {
@@ -746,11 +929,11 @@ test('remove disk', function(t) {
                         t.ok(obj.state === 'stopped', 'VM is stopped.');
                         if (obj.state === 'stopped') {
                             // same update
-                            VM.update(vmobj.uuid, {'remove_disks': [disk.path]}, function (err) {
+                            VM.update(vmobj.uuid, {'remove_disks': [disk0.path, disk1.path]}, function (err) {
                                 t.ok(!err, 'removed disk: ' + (err ? err.message : err));
                                 // check that zfs filesystem is gone, also
                                 // reload and check that disk is no longer in list
-                                zfs(['list', disk.zfs_filesystem], function (err, fds) {
+                                zfs(['list', disk0.zfs_filesystem], function (err, fds) {
                                     t.ok(err
                                         && err.hasOwnProperty('message')
                                         && err.message.match('dataset does not exist'),
@@ -790,3 +973,111 @@ test('delete zone', function(t) {
         t.end();
     }
 });
+
+test('create KVM VM w/ *_drivers', {'timeout': 240000}, function(t) {
+    var state = {'brand': 'kvm'};
+    vmtest.on_new_vm(t, null, PAYLOADS['create_w_drivers'], state, [
+        function (cb) {
+            VM.load(state.uuid, function(err, obj) {
+                var has_primary = 0;
+                var n;
+
+                if (err) {
+                    t.ok(false, 'load obj from new VM: ' + err.message);
+                    return cb(err);
+                }
+
+                // ensure nic_driver + disk_driver properties are set, we expect
+                // model to be virtio since we explicitly set, when we add
+                // another it should be the *_driver value
+                t.ok(obj.nic_driver === 'e1000', 'VM has nic_driver');
+                t.ok(obj.disk_driver === 'ide', 'VM has disk_driver');
+                t.ok(obj.nics[0].model === 'virtio', 'VM has correct nic.model');
+                t.ok(obj.disks[0].model === 'virtio', 'VM has correct disk.model');
+
+                cb();
+            });
+        }, function (cb) {
+
+            // add a disk and a nic w/o model and ensure they've also got the correct.model
+            // matching *_driver not the first nic.
+            VM.update(state.uuid, PAYLOADS['add_nic_and_disk_wo_model'], function(err) {
+                t.ok(!err, 'updating VM: ' + (err ? err.message : 'success'));
+                if (err) {
+                    return cb();
+                }
+                VM.load(state.uuid, function(err, obj) {
+                    t.ok(!err, 'load VM: ' + (err ? err.message : 'success'));
+                    if (err) {
+                        return cb(err);
+                    }
+                    t.ok(obj.disks[1].model === obj.disk_driver, 'disk1 model is ' + obj.disks[1].model + ' expected ' + obj.disk_driver);
+                    t.ok(obj.nics[1].model === obj.nic_driver, 'nic1 model is ' + obj.nics[1].model + ' expected ' + obj.nic_driver);
+
+                    cb();
+                });
+            });
+        }
+    ], function (err) {
+        t.end();
+    });
+});
+
+test('test 100%/10% refreservation, change to 50%/75%', {'timeout': 240000}, function(t) {
+    p = {
+        'brand': 'kvm',
+        'vcpus': 1,
+        'ram': 256,
+        'alias': 'autotest-' + process.pid,
+        'do_not_inventory': true,
+        'autoboot': false,
+        'disk_driver': 'virtio',
+        'disks': [
+          {
+            'boot': true,
+            'image_uuid': vmtest.CURRENT_UBUNTU_UUID,
+            'image_size': vmtest.CURRENT_UBUNTU_SIZE,
+            'refreservation': vmtest.CURRENT_UBUNTU_SIZE
+          }, {
+            'size': 1024,
+            'refreservation': 10
+          }
+        ]
+    };
+    state = {'brand': p.brand};
+    vmtest.on_new_vm(t, null, p, state, [
+        function (cb) {
+            VM.load(state.uuid, function(err, vmobj) {
+                if (err) {
+                    t.ok(false, 'load obj from new VM: ' + err.message);
+                    return cb(err);
+                }
+
+                VM.update(state.uuid, {update_disks: [
+                    {path: vmobj.disks[0].path, refreservation: (vmobj.disks[0].size * 0.5)},
+                    {path: vmobj.disks[1].path, refreservation: (vmobj.disks[1].size * 0.75)}
+                    ]}, function(err) {
+
+                    t.ok(!err, 'updating VM: ' + (err ? err.message : 'success'));
+                    if (err) {
+                        return cb();
+                    }
+                    VM.load(state.uuid, function(err, obj) {
+                        var disks;
+                        t.ok(!err, 'load VM: ' + (err ? err.message : 'success'));
+                        if (err) {
+                            return cb(err);
+                        }
+
+                        disks = obj.disks;
+                        t.ok(disks[0].refreservation === (disks[0].size * 0.5), 'disk 0 has correct refreservation: ' + disks[0].refreservation + '/' + (disks[0].size * 0.5));
+                        t.ok(disks[1].refreservation === (disks[1].size * 0.75), 'disk 1 has correct refreservation: ' + disks[1].refreservation + '/' + (disks[1].size * 0.75));
+                        state.vmobj = obj;
+                        cb();
+                    });
+                });
+            });
+        }
+    ]);
+});
+
