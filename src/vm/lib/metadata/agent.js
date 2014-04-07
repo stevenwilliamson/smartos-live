@@ -1,6 +1,9 @@
+// vim: set ts=4 sts=4 sw=4 et:
+var assert = require('assert');
 var VM  = require('/usr/vm/node_modules/VM');
 var ZWatch = require('./zwatch');
 var common = require('./common');
+var crc32 = require('./crc32');
 var async = require('/usr/node/node_modules/async');
 var execFile = require('child_process').execFile;
 var fs = require('fs');
@@ -27,6 +30,7 @@ var sdc_fields = [
     'hostname',
     'limit_priv',
     'last_modified',
+    'maintain_resolvers',
     'max_physical_memory',
     'max_locked_memory',
     'max_lwps',
@@ -53,6 +57,7 @@ var MetadataAgent = module.exports = function (options) {
     this.log = options.log;
     this.zlog = {};
     this.zones = {};
+    this.zoneRetryTimeouts = {};
     this.zoneConnections = {};
 };
 
@@ -228,6 +233,8 @@ MetadataAgent.prototype.start = function () {
             });
         } else if (msg.cmd === 'stop') {
             if (self.zoneConnections[msg.zonename]) {
+                self.log.trace('saw zone ' + msg.zonename
+                    + ' stop, calling end()');
                 self.zoneConnections[msg.zonename].end();
             }
         }
@@ -396,15 +403,22 @@ function (zopts, callback, waitSecs) {
                 { err: error },
                 'createZoneSocket error, %s seconds before next attempt',
                 waitSecs);
-            setTimeout(function () {
-                self.createZoneSocket(zopts, function () {}, waitSecs);
-            }, waitSecs * 1000);
+            assert(!self.zoneRetryTimeouts[zopts.zone], 'timeout already set'
+                + ' for zone ' + zopts.zone + ', should have been cleared.');
+            self.zoneRetryTimeouts[zopts.zone] =
+                setTimeout(function () {
+                    self.zoneRetryTimeouts[zopts.zone] = null;
+                    self.createZoneSocket(zopts, callback, waitSecs);
+                }, waitSecs * 1000);
             return;
         }
 
         var server = net.createServer(function (socket) {
             var handler = self.makeMetadataHandler(zopts.zone, socket);
             var buffer = '';
+
+            zlog.trace('creating new server for FD ' + fd);
+
             socket.on('data', function (data) {
                 var chunk, chunks;
                 buffer += data.toString();
@@ -432,16 +446,43 @@ function (zopts, callback, waitSecs) {
             });
         });
 
+        /*
+         * When we create a new zoneConnections entry, we want to make sure if
+         * there's an existing one (due to an error that we're retrying for
+         * example) that we clear the existing one and its timeout before
+         * creating a new one.
+         */
+        zlog.trace('creating new zoneConnections[' + zopts.zone + ']');
+        if (self.zoneConnections[zopts.zone]
+            && !self.zoneConnections[zopts.zone].done) {
+
+            self.log.trace('creating new connection for ' + zopts.zone
+                + ', but existing zoneConnection exists, calling end()');
+            self.zoneConnections[zopts.zone].end();
+        }
+
         self.zoneConnections[zopts.zone] = {
             conn: server,
             done: false,
             end: function () {
+                if (self.zoneRetryTimeouts[zopts.zone]) {
+                    // When .end() is called, want to stop any existing retries
+                    clearTimeout(self.zoneRetryTimeouts[zopts.zone]);
+                    self.zoneRetryTimeouts[zopts.zone] = null;
+                }
                 if (this.done) {
+                    zlog.trace(zopts.zone + ' ' + fd + ' already done, not '
+                        + 'closing again.');
                     return;
                 }
                 this.done = true;
                 zlog.info('Closing server');
-                server.close();
+                try {
+                    server.close();
+                } catch (e) {
+                    zlog.error({err: e}, 'Caught exception closing server: '
+                        + e.message);
+                }
             }
         };
 
@@ -451,6 +492,7 @@ function (zopts, callback, waitSecs) {
                 throw e;
             }
         });
+
         var Pipe = process.binding('pipe_wrap').Pipe;
         var p = new Pipe(true);
         p.open(fd);
@@ -458,12 +500,20 @@ function (zopts, callback, waitSecs) {
         server._handle = p;
 
         server.listen();
-    });
 
-    if (callback) {
-        callback();
-    }
+        if (callback) {
+            callback();
+        }
+    });
 };
+
+function base64_decode(input) {
+    try {
+        return (new Buffer(input, 'base64')).toString();
+    } catch (err) {
+        return null;
+    }
+}
 
 MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
     var self = this;
@@ -483,6 +533,8 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
         var val;
         var vmobj;
         var want;
+        var reqid;
+        var req_is_v2 = false;
 
         parts = rtrim(data.toString()).replace(/\n$/, '')
             .match(/^([^\s]+)\s?(.*)/);
@@ -495,15 +547,28 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
         cmd = parts[1];
         want = parts[2];
 
-        if (cmd === 'GET' && !want) {
+        if ((cmd === 'NEGOTIATE' || cmd === 'GET') && !want) {
             write('invalid command\n');
             return;
         }
 
         vmobj = self.zones[zone];
 
+        // Unbox V2 protocol frames:
+        if (cmd === 'V2') {
+            if (!parse_v2_request(want))
+                return;
+        }
+
         if (cmd === 'GET') {
-            zlog.info('Serving ' + want);
+            want = (want || '').trim();
+            if (!want) {
+                returnit(new Error('Invalid GET Request'));
+                return;
+            }
+
+            zlog.info('Serving GET ' + want);
+
             if (want.slice(0, 4) === 'sdc:') {
                 want = want.slice(4);
 
@@ -513,16 +578,18 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
                 // that depends on it, please add a note about that here
                 // otherwise expect it will be removed on you sometime.
                 if (want === 'nics' && vmobj.hasOwnProperty('nics')) {
-                    val = JSON.stringify(vmobj.nics);
-                    returnit(null, val);
-                    return;
+                    self.updateZone(zone, function () {
+                        val = JSON.stringify(vmobj.nics);
+                        returnit(null, val);
+                        return;
+                    });
                 } else if (want === 'resolvers'
                     && vmobj.hasOwnProperty('resolvers')) {
 
-                    // resolvers and routes are special because we might reload
-                    // metadata trying to get the new ones w/o zone reboot. To
-                    // ensure these are fresh we always run updateZone which
-                    // reloads the data if stale.
+                    // resolvers, nics and routes are special because we might
+                    // reload metadata trying to get the new ones w/o zone
+                    // reboot. To ensure these are fresh we always run
+                    // updateZone which reloads the data if stale.
                     self.updateZone(zone, function () {
                         // See NOTE above about nics, same applies to resolvers.
                         // It's here solely for the use of mdata-fetch.
@@ -618,6 +685,68 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
                     }
                 });
             }
+        } else if (!req_is_v2 && cmd === 'NEGOTIATE') {
+            if (want === 'V2') {
+                write('V2_OK\n');
+            } else {
+                write('FAILURE\n');
+            }
+            return;
+        } else if (req_is_v2 && cmd === 'DELETE') {
+            want = (want || '').trim();
+            if (!want) {
+                returnit(new Error('Invalid DELETE Request'));
+                return;
+            }
+
+            zlog.info('Serving DELETE ' + want);
+
+            setMetadata(want, null, function (err) {
+                if (err) {
+                    returnit(err);
+                } else {
+                    returnit(null, 'OK');
+                }
+            });
+        } else if (req_is_v2 && cmd === 'PUT') {
+            var key;
+            var value;
+            var terms;
+
+            terms = (want || '').trim().split(' ');
+
+            if (terms.length !== 2) {
+                returnit(new Error('Invalid PUT Request'));
+                return;
+            }
+
+            // PUT requests have two space-separated BASE64-encoded
+            // arguments: the Key and then the Value.
+            key = (base64_decode(terms[0]) || '').trim();
+            value = base64_decode(terms[1]);
+
+            if (!key || value === null) {
+                returnit(new Error('Invalid PUT Request'));
+                return;
+            }
+
+            if (key.slice(0, 4) === 'sdc:') {
+                returnit(new Error('Cannot update the "sdc" Namespace.'));
+                return;
+            }
+
+            zlog.info('Serving PUT ' + key);
+            setMetadata(key, value, function (err) {
+                if (err) {
+                    zlog.error(err, 'could not set metadata (key "' + key
+                        + '")');
+                    returnit(err);
+                } else {
+                    returnit(null, 'OK');
+                }
+            });
+
+            return;
         } else if (cmd === 'KEYS') {
             addMetadata(function (err) {
                 var ckeys = [];
@@ -732,31 +861,132 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
             });
         }
 
+        function setMetadata(_key, _value, cb) {
+            var payload = {};
+            var which = 'customer_metadata';
+
+            // Some keys come from "internal_metadata":
+            if (_key.match(/_pw$/) || _key === 'operator-script') {
+                which = 'internal_metadata';
+            }
+
+            // Construct payload for VM.update()
+            if (_value) {
+                payload['set_' + which] = {};
+                payload['set_' + which][_key] = _value;
+            } else {
+                payload['remove_' + which] = [ _key ];
+            }
+
+            zlog.trace({ payload: payload }, 'calling VM.update()');
+            VM.update(vmobj.uuid, payload, zlog, cb);
+        }
+
+        function parse_v2_request(inframe) {
+            var m;
+            var m2;
+            var newcrc32;
+            var framecrc32;
+            var clen;
+
+            zlog.trace({ request: inframe }, 'incoming V2 request');
+
+            m = inframe.match(
+                /\s*([0-9]+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+(.*)/);
+            if (!m) {
+                zlog.error('V2 frame did not parse: ', inframe);
+                return (false);
+            }
+
+            clen = Number(m[1]);
+            if (!(clen > 0) || clen !== (m[3] + ' ' + m[4]).length) {
+                zlog.error('V2 invalid clen: ' + m[1]);
+                return (false);
+            }
+
+            newcrc32 = crc32.crc32_calc(m[3] + ' ' + m[4]);
+            framecrc32 = m[2];
+            if (framecrc32 !== newcrc32) {
+                zlog.error('V2 crc mismatch (ours ' + newcrc32
+                    + ' theirs ' + framecrc32 + '): ' + want);
+                return (false);
+            }
+
+            reqid = m[3];
+
+            m2 = m[4].match(/\s*(\S+)\s*(.*)/);
+            if (!m2) {
+                zlog.error('V2 invalid body: ' + m[4]);
+                return (false);
+            }
+
+            cmd = m2[1];
+            want = base64_decode(m2[2]);
+
+            req_is_v2 = true;
+
+            return (true);
+        }
+
+
+        function format_v2_response(code, body) {
+            var resp;
+            var fullresp;
+
+            resp = reqid + ' ' + code;
+            if (body)
+                resp += ' ' + (new Buffer(body).toString('base64'));
+
+            fullresp = 'V2 ' + resp.length + ' ' + crc32.crc32_calc(
+                resp) + ' ' + resp + '\n';
+
+            zlog.trace({ response: fullresp }, 'formatted V2 response');
+
+            return (fullresp);
+        }
+
         function returnit(error, retval) {
             var towrite;
 
             if (error) {
                 zlog.error(error.message);
-                write('FAILURE\n');
+                if (req_is_v2)
+                    write(format_v2_response('FAILURE', error.message));
+                else
+                    write('FAILURE\n');
                 return;
             }
 
             // String value
             if (common.isString(retval)) {
-                towrite = retval.replace(/^\./mg, '..');
-                write('SUCCESS\n' + towrite + '\n.\n');
+                if (req_is_v2) {
+                    write(format_v2_response('SUCCESS', retval));
+                } else {
+                    towrite = retval.replace(/^\./mg, '..');
+                    write('SUCCESS\n' + towrite + '\n.\n');
+                }
                 return;
             } else if (!isNaN(retval)) {
-                towrite = retval.toString().replace(/^\./mg, '..');
-                write('SUCCESS\n' + towrite + '\n.\n');
+                if (req_is_v2) {
+                    write(format_v2_response('SUCCESS', retval.toString()));
+                } else {
+                    towrite = retval.toString().replace(/^\./mg, '..');
+                    write('SUCCESS\n' + towrite + '\n.\n');
+                }
                 return;
             } else if (retval) {
                 // Non-string value
-                write('FAILURE\n');
+                if (req_is_v2)
+                    write(format_v2_response('FAILURE'));
+                else
+                    write('FAILURE\n');
                 return;
             } else {
                 // Nothing to return
-                write('NOTFOUND\n');
+                if (req_is_v2)
+                    write(format_v2_response('NOTFOUND'));
+                else
+                    write('NOTFOUND\n');
                 return;
             }
         }

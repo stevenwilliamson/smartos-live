@@ -40,6 +40,7 @@ var async = require('async');
 var nopt = require('nopt');
 var sprintf = require('extsprintf').sprintf;
 var rimraf = require('rimraf');
+var genUuid = require('node-uuid');
 var bunyan;
 if (process.platform === 'sunos') {
     bunyan = require('/usr/node/node_modules/bunyan');
@@ -314,11 +315,13 @@ CLI.prototype.main = function main(argv, options, callback) {
          *
          * - If no `options.log` is given, we log to stderr.
          * - By default we log at the 'warn' level. Intentionally that is
-         *   almost no logging
-         * - '-v|--verbose' to set to trace and enable 'src' (source file
-         *   location information)
+         *   almost no logging.
+         * - use IMGADM_LOG_LEVEL=trace envvar to set to trace level and enable
+         *   source location (src=true) in log records
+         * - '-v|--verbose' or IMGADM_LOG_LEVEL=debug to set to debug level
+         * - use IMGADM_LOG_LEVEL=<bunyan level> to set to a different level
          * - '-E' to have a possible error be logged as the last single line
-         *   of stderr as a Bunyan log record with an 'err'. I.e. in a
+         *   of stderr as a raw Bunyan log JSON record with an 'err'. I.e. in a
          *   structured format more useful to automation tooling.
          *
          * Logging is in Bunyan (JSON) format so one needs to pipe via
@@ -327,6 +330,14 @@ CLI.prototype.main = function main(argv, options, callback) {
          *
          *      imgadm -v ... 2>&1 | bunyan
          */
+        var req_id;
+        if (process.env.REQ_ID) {
+            req_id = process.env.REQ_ID;
+        } else if (process.env.req_id) {
+            req_id = process.env.req_id;
+        } else {
+            req_id = genUuid();
+        }
         var log = options.log || bunyan.createLogger({
             name: self.name,
             streams: [
@@ -335,18 +346,34 @@ CLI.prototype.main = function main(argv, options, callback) {
                     level: 'warn'
                 }
             ],
-            serializers: bunyan.stdSerializers
+            serializers: bunyan.stdSerializers,
+            req_id: req_id
         });
-        if (opts.verbose) {
-            log = log.child({src: true});
-            log.level('trace');
+        var IMGADM_LOG_LEVEL;
+        try {
+            if (process.env.IMGADM_LOG_LEVEL
+                && bunyan.resolveLevel(process.env.IMGADM_LOG_LEVEL))
+            {
+                IMGADM_LOG_LEVEL = process.env.IMGADM_LOG_LEVEL;
+            }
+        } catch (e) {
+            log.warn('invalid IMGADM_LOG_LEVEL=%s envvar (ignoring)',
+                process.env.IMGADM_LOG_LEVEL);
+        }
+        if (IMGADM_LOG_LEVEL && IMGADM_LOG_LEVEL === 'trace') {
+            log.src = true;
+            log.level(IMGADM_LOG_LEVEL);
+        } else if (opts.verbose) {
+            log.level('debug');
+        } else if (IMGADM_LOG_LEVEL) {
+            log.level(IMGADM_LOG_LEVEL);
         }
         self.log = log;
         self.verbose = Boolean(opts.verbose);
         self.structuredErr = opts.E;
 
         // Handle top-level args and opts.
-        self.log.debug({opts: opts, argv: argv}, 'parsed argv');
+        self.log.trace({opts: opts, argv: argv}, 'parsed argv');
         var args = opts.argv.remain;
         if (opts.version) {
             console.log(self.name + ' ' + common.getVersion());
@@ -370,6 +397,7 @@ CLI.prototype.main = function main(argv, options, callback) {
         // Dispatch subcommands.
         imgadm.createTool({log: self.log}, function (createErr, tool) {
             if (createErr) {
+                self.printErr(createErr, 'imgadm tool creation error');
                 callback(createErr);
                 return;
             }
@@ -443,7 +471,8 @@ CLI.prototype.printHelp = function printHelp(callback) {
         'Options:',
         '    -h, --help          Show this help message and exit.',
         '    --version           Show version and exit.',
-        '    -v, --verbose       Verbose logging.'
+        '    -v, --verbose       Verbose logging (debug level). See also',
+        '                        IMGADM_LOG_LEVEL=<level> envvar.'
     ]);
 
     if (self.envopts && self.envopts.length) {
@@ -497,12 +526,11 @@ CLI.prototype.printHelp = function printHelp(callback) {
             '',
             '    imgadm list                            list installed images',
             '    imgadm get [-P <pool>] <uuid>          info on an installed image',
-            '    imgadm update                          gather info on unknown images',
+            '    imgadm update [<uuid>...]              update installed images',
             '    imgadm delete [-P <pool>] <uuid>       remove an installed image',
             '',
-            '    # Experimental',
-            '    imgadm create <uuid> [<manifest-field>=<value> ...]',
-            '                                           create an image from a prepared VM',
+            '    imgadm create <vm-uuid> [<manifest-field>=<value> ...] ...',
+            '                                           create an image from a VM',
             '    imgadm publish -m <manifest> -f <file> <imgapi-url>',
             '                                           publish an image to an image repo'
         ]);
@@ -780,7 +808,15 @@ CLI.prototype.do_avail = function do_avail(subcmd, opts, args, callback) {
             'unexpected args: ' + args.join(' ')));
         return;
     }
-    self.tool.sourcesList(function (err, imagesInfo) {
+    var filterOpts = {};
+    if (opts.marker) {
+        assertUuid(opts.marker);
+        filterOpts.marker = opts.marker;
+    }
+    if (opts.limit) {
+        filterOpts.limit = opts.limit;
+    }
+    self.tool.sourcesList(filterOpts, function (err, imagesInfo) {
         // Even if there was an err, we still attempt to return results
         // for working sources.
         if (opts.json) {
@@ -827,6 +863,11 @@ CLI.prototype.do_avail.description = (
     + '                       "uuid,name,version,os,published".\n'
     + '    -s field1,...      Sort on the given fields. Default is\n'
     + '                       "published_at,name".\n'
+    + '    -m, --marker       Only list images that were created after the\n'
+    + '                       marker image creation date. The marker must be\n'
+    + '                       an image UUID.\n'
+    + '    -l, --limit        Maximum number of images to return. Images are\n'
+    + '                       sorted by creation date (ASC) by default.\n'
     + '\n'
     + textWrap('Valid fields for "-o" and "-s" are: '
         + availValidFields.join(', ') + '.') + '\n'
@@ -835,13 +876,17 @@ CLI.prototype.do_avail.longOpts = {
     'json': Boolean,
     'skipHeader': Boolean,
     'output': String,
-    'sort': String
+    'sort': String,
+    'marker': String,
+    'limit': Number
 };
 CLI.prototype.do_avail.shortOpts = {
     'j': ['--json'],
     'H': ['--skipHeader'],
     'o': ['--output'],
-    's': ['--sort']
+    's': ['--sort'],
+    'm': ['--marker'],
+    'l': ['--limit']
 };
 CLI.prototype.do_avail.aliases = ['available'];
 
@@ -1142,7 +1187,6 @@ CLI.prototype.do_import = function do_import(subcmd, opts, args, callback) {
                     callback(importErr);
                     return;
                 }
-                console.log('Imported image %s to "%s/%s".', uuid, zpool, uuid);
                 callback();
             });
         });
@@ -1248,7 +1292,6 @@ CLI.prototype.do_install = function do_install(subcmd, opts, args, callback) {
                 callback(installErr);
                 return;
             }
-            console.log('Installed image %s to "%s/%s".', uuid, zpool, uuid);
             callback();
         });
     });
@@ -1287,27 +1330,42 @@ CLI.prototype.do_install.shortOpts = {
  * `imgadm update`
  */
 CLI.prototype.do_update = function do_update(subcmd, opts, args, callback) {
+    var options = {
+        dryRun: opts.dryRun
+    };
     if (args.length) {
-        callback(new errors.UsageError(format(
-            'unexpected arguments: "%s"', args.join(' '))));
-        return;
+        options.uuids = args;
     }
-    this.tool.updateImages(callback);
+    this.tool.updateImages(options, callback);
 };
 CLI.prototype.do_update.description = (
-    'Gather info on unknown images.\n'
+    'Update currently installed images, if necessary.\n'
     + '\n'
     + 'Images that are installed without "imgadm" (e.g. via "zfs recv")\n'
-    + 'not have cached image manifest information. This command will attempt\n'
-    + 'to retrieve this information from current image sources based on image\n'
-    + 'UUID.\n'
+    + 'may not have cached image manifest information. Also, images installed\n'
+    + 'prior to imgadm version 2.0.3 will not have a "@final" snapshot\n'
+    + '(preferred for provisioning and require for incremental image\n'
+    + 'creation, via "imgadm create -i ..."). This command will attempt\n'
+    + 'to retrieve manifest information and to ensure images have the correct\n'
+    + '"@final" snapshot, using info from current image sources.\n'
+    + '\n'
+    + 'If no "<uuid>" is given, then update is run for all installed images.\n'
     + '\n'
     + 'Usage:\n'
-    + '    $NAME update\n'
+    + '    $NAME update [<uuid>...]\n'
     + '\n'
     + 'Options:\n'
     + '    -h, --help         Print this help and exit.\n'
+    + '    -n                 Do a dry-run (do not actually make changes).\n'
 );
+CLI.prototype.do_update.longOpts = {
+    // WARNING: When I switch option processing to dashdash, the '--camelCase'
+    //  spellings will be replaced with either no long opt or '--this-style'.
+    'dryRun': Boolean
+};
+CLI.prototype.do_update.shortOpts = {
+    'n': ['--dryRun']
+};
 
 
 /**
@@ -1334,6 +1392,13 @@ CLI.prototype.do_create = function do_create(subcmd, opts, args, callback) {
     if (opts['output-template'] && opts.publish) {
         callback(new errors.UsageError(
             'cannot specify both -o/--output-template and -p/--publish'));
+        return;
+    }
+    if (opts['max-origin-depth'] !== undefined
+        && Number(opts['max-origin-depth']) < 2) {
+        callback(new errors.UsageError(format(
+            'invalid max-origin-depth "%s": must be greater than 1',
+            opts['max-origin-depth'])));
         return;
     }
 
@@ -1425,9 +1490,12 @@ CLI.prototype.do_create = function do_create(subcmd, opts, args, callback) {
             manifest: manifest,
             compression: opts.compression,
             incremental: opts.incremental,
+            prepareScript: opts['prepare-script']
+                && fs.readFileSync(opts['prepare-script'], 'utf8'),
             savePrefix: savePrefix,
             logCb: console.log,
-            quiet: opts.quiet
+            quiet: opts.quiet,
+            maxOriginDepth: opts['max-origin-depth']
         };
         self.tool.createImage(createOpts, function (createErr, imageInfo) {
             if (createErr) {
@@ -1463,16 +1531,28 @@ CLI.prototype.do_create = function do_create(subcmd, opts, args, callback) {
 };
 CLI.prototype.do_create.description = (
     /* BEGIN JSSTYLED */
-    'Create a new image from a prepared and stopped VM.\n'
+    'Create an image from the given VM and manifest data.\n'
     + '\n'
-    + 'To create a new virtual image, one first creates a VM from an existing\n'
-    + 'image, customizes it, runs "sm-prepare-image", shuts it down, and\n'
-    + 'then runs this "imgadm create" to create the image file and manifest.\n'
+    + 'There are two basic calling modes: (1) a prepare-image script is\n'
+    + 'provided (via "-s") to have imgadm automatically run the script inside the\n'
+    + 'VM before image creation; or (2) the given VM is already "prepared" and\n'
+    + 'shutdown.\n'
     + '\n'
-    + 'This will snapshot the VM, create a manifest and image file and\n'
-    + 'delete the snapshot. Optionally the image can be published directly\n'
-    + 'to a given image repository (IMGAPI) via "-p URL" (or that can be\n'
-    + 'done separately via "imgadm publish").\n'
+    + 'The former involves snapshotting the VM, running the prepare-image script\n'
+    + '(via the SmartOS mdata operator-script facility), creating the image,\n'
+    + 'rolling back to the pre-prepared state. This is preferred because it is (a)\n'
+    + 'easier (fewer steps to follow for imaging) and (b) safe (gating with\n'
+    + 'snapshot/rollback ensures the VM is unchanged by imaging -- the preparation\n'
+    + 'script is typically destructive.\n'
+    + '\n'
+    + 'With the latter, one first creates a VM from an existing image, customizes\n'
+    + 'it, runs "sm-prepare-image" (or equivalent for KVM guest OSes), shuts it\n'
+    + 'down, runs this "imgadm create" to create the image file and manifest, and\n'
+    + 'finally destroys the "proto" VM.\n'
+    + '\n'
+    + 'With either calling mode, the image can optionally be published directly\n'
+    + 'to a given image repository (IMGAPI) via "-p URL". This can also be\n'
+    + 'done separately via "imgadm publish".\n'
     + '\n'
     + 'Usage:\n'
     + '    $NAME create [<options>] <vm-uuid> [<manifest-field>=<value> ...]\n'
@@ -1482,7 +1562,7 @@ CLI.prototype.do_create.description = (
     + '    -m <manifest>  Path to image manifest data (as JSON) to\n'
     + '                   include in the created manifest. Specify "-"\n'
     + '                   to read manifest JSON from stdin.\n'
-    + '    -o PATH, --output-template PATH\n'
+    + '    -o <path>, --output-template <path>\n'
     + '                   Path prefix to which to save the created manifest\n'
     + '                   and image file. By default "NAME-VER.imgmanifest\n'
     + '                   and "NAME-VER.zfs[.EXT]" are saved to the current\n'
@@ -1490,12 +1570,27 @@ CLI.prototype.do_create.description = (
     + '                   to it. If the basename of "PATH" is not a dir,\n'
     + '                   then "PATH.imgmanifest" and "PATH.zfs[.EXT]" are\n'
     + '                   created.\n'
-    + '    -c COMPRESSION One of "none", "gz" or "bzip2" for the compression\n'
+    + '    -c <comp>      One of "none", "gz" or "bzip2" for the compression\n'
     + '                   to use on the image file, if any. Default is "none".\n'
     + '    -i             Build an incremental image (based on the "@final"\n'
     + '                   snapshot of the source image for the VM).\n'
     + '\n'
-    + '    -p URL, --publish URL\n'
+    + '    --max-origin-depth <max-origin-depth>\n'
+    + '                   Maximum origin depth to allow when creating\n'
+    + '                   incremental images. E.g. a value of 3 means that\n'
+    + '                   the image will only be created if there are no more\n'
+    + '                   than 3 parent images in the origin chain.\n'
+    + '\n'
+    + '    -s <prepare-image-path>\n'
+    + '                   Path to a script that is run inside the VM to\n'
+    + '                   prepare it for imaging. Specifying this triggers the\n'
+    + '                   full snapshot/prepare-image/create-image/rollback\n'
+    + '                   automatic image creation process (see notes above).\n'
+    + '                   There is a contract with "imgadm" that a \n'
+    + '                   prepare-image script must follow. See the "PREPARE\n'
+    + '                   IMAGE SCRIPT" section in "man imgadm".\n'
+    + '\n'
+    + '    -p <url>, --publish <url>\n'
     + '                   Publish directly to the given image source\n'
     + '                   (an IMGAPI server). You may not specify both\n'
     + '                   "-p" and "-o".\n'
@@ -1513,23 +1608,28 @@ CLI.prototype.do_create.description = (
     + '                   will be strings.\n'
     + '\n'
     + 'Examples:\n'
+    + '    # Create an image from VM 5f7a53e9-fc4d-d94b-9205-9ff110742aaf.\n'
+    + '    echo \'{"name": "foo", "version": "1.0.0"}\' \\\n'
+    + '        | imgadm create -m - -s /path/to/prepare-image \\\n'
+    + '            5f7a53e9-fc4d-d94b-9205-9ff110742aaf\n'
+    + '    \n'
+    + '    # Specify manifest data as arguments.\n'
+    + '    imgadm create -s prep-image 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \\\n'
+    + '        name=foo version=1.0.0\n'
+    + '    \n'
+    + '    # Write the manifest and image file to "/var/tmp".\n'
+    + '    imgadm create -s prep-image 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \\\n'
+    + '        name=foo version=1.0.0 -o /var/tmp\n'
+    + '    \n'
+    + '    # Publish directly to an image repository (IMGAPI server).\n'
+    + '    imgadm create -s prep-image 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \\\n'
+    + '        name=foo version=1.0.0 --publish https://images.example.com\n'
+    + '    \n'
     + '    # Create an image from the prepared and shutdown VM\n'
     + '    # 5f7a53e9-fc4d-d94b-9205-9ff110742aaf, using some manifest JSON\n'
     + '    # data from stdin.\n'
     + '    echo \'{"name": "foo", "version": "1.0.0"}\' \\\n'
     + '        | imgadm create -m - 5f7a53e9-fc4d-d94b-9205-9ff110742aaf\n'
-    + '    \n'
-    + '    # Specify manifest data as arguments.\n'
-    + '    imgadm create 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \\\n'
-    + '        name=foo version=1.0.0\n'
-    + '    \n'
-    + '    # Write the manifest and image file to "/var/tmp".\n'
-    + '    imgadm create 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \\\n'
-    + '        name=foo version=1.0.0 -o /var/tmp\n'
-    + '    \n'
-    + '    # Publish directly to an image repository (IMGAPI server).\n'
-    + '    imgadm create 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \\\n'
-    + '        name=foo version=1.0.0 --publish https://images.example.com\n'
     /* END JSSTYLED */
 );
 CLI.prototype.do_create.longOpts = {
@@ -1537,14 +1637,17 @@ CLI.prototype.do_create.longOpts = {
     'compression': String,
     'output-template': String,
     'incremental': Boolean,
+    'prepare-script': String,
     'publish': String,
-    'quiet': Boolean
+    'quiet': Boolean,
+    'max-origin-depth': Number
 };
 CLI.prototype.do_create.shortOpts = {
     'm': ['--manifest'],
     'c': ['--compression'],
     'o': ['--output-template'],
     'i': ['--incremental'],
+    's': ['--prepare-script'],
     'p': ['--publish'],
     'q': ['--quiet']
 };
@@ -1603,12 +1706,13 @@ CLI.prototype.do_publish = function do_publish(subcmd, opts, args, callback) {
 };
 CLI.prototype.do_publish.description = (
     /* BEGIN JSSTYLED */
-    '**Experimental.** Publish an image from local manifest and image\n'
-    + 'data files.\n'
+    'Publish an image (local manifest and data) to a remote IMGAPI repo.\n'
     + '\n'
     + 'Typically the local manifest and image file are created with\n'
     + '"imgadm create ...". Note that "imgadm create" supports a\n'
     + '"-p/--publish" option to publish directly in one step.\n'
+    + 'Limitation: This does not yet support *authentication* that some\n'
+    + 'IMGAPI image repositories require.\n'
     + '\n'
     + 'Usage:\n'
     + '    $NAME publish [<options>] -m <manifest> -f <file> <imgapi-url>\n'

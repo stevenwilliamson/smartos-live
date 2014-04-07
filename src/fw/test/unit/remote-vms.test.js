@@ -71,11 +71,13 @@ exports['local VM to remote VM'] = function (t) {
         remoteVMs: [rvm],
         rules: [
             {
+                owner_uuid: vm.owner_uuid,
                 rule: util.format('FROM vm %s TO vm %s ALLOW tcp PORT 80',
                                 vm.uuid, rvm.uuid),
                 enabled: true
             },
             {
+                owner_uuid: vm.owner_uuid,
                 rule: util.format('FROM vm %s TO vm %s ALLOW tcp PORT 80',
                                 rvm.uuid, vm.uuid),
                 enabled: true
@@ -179,6 +181,7 @@ exports['local VM to remote VM'] = function (t) {
     }, function (cb) {
         // Add another rule referencing rvm
         rule3 = {
+            owner_uuid: vm.owner_uuid,
             enabled: true,
             rule: util.format('FROM vm %s TO vm %s ALLOW udp PORT 161',
                             rvm.uuid, vm.uuid)
@@ -356,6 +359,7 @@ exports['local VM to remote VM'] = function (t) {
         // Add another rule and rvm, to make sure that the existing (but
         // disabled) rules won't cause errors
         rule4 = {
+            owner_uuid: vm.owner_uuid,
             rule: util.format('FROM vm %s TO vm %s ALLOW tcp PORT 90',
                             rvm2.uuid, vm.uuid),
             enabled: true
@@ -449,11 +453,13 @@ exports['local VM to remote tag'] = function (t) {
         remoteVMs: [rvm],
         rules: [
             {
+                owner_uuid: vm.owner_uuid,
                 rule: util.format('FROM vm %s TO tag other ALLOW tcp PORT 80',
                                 vm.uuid),
                 enabled: true
             },
             {
+                owner_uuid: vm.owner_uuid,
                 rule: util.format('FROM tag other TO vm %s ALLOW tcp PORT 80',
                                 vm.uuid),
                 enabled: true
@@ -530,6 +536,7 @@ exports['local VM to remote tag'] = function (t) {
         // Add another rule referencing rvm
         rule3 = {
             enabled: true,
+            owner_uuid: vm.owner_uuid,
             rule: util.format('FROM vm %s TO vm %s ALLOW udp PORT 161',
                             rvm.uuid, vm.uuid)
         };
@@ -645,11 +652,13 @@ exports['local VM and remote VM to IP'] = function (t) {
         remoteVMs: [rvm],
         rules: [
             {
+                owner_uuid: vm.owner_uuid,
                 rule: util.format('FROM (vm %s OR vm %s) TO ip 10.0.0.1 '
                     + 'ALLOW tcp PORT 80', vm.uuid, rvm.uuid),
                 enabled: true
             },
             {
+                owner_uuid: vm.owner_uuid,
                 rule: util.format('FROM ip 10.0.0.1 TO (vm %s OR vm %s) '
                     + 'ALLOW tcp PORT 80', vm.uuid, rvm.uuid),
                 enabled: true
@@ -745,6 +754,7 @@ exports['all vms to local VM'] = function (t) {
         remoteVMs: [rvm],
         rules: [
             {
+                owner_uuid: vm.owner_uuid,
                 rule: util.format('FROM all vms TO vm %s ALLOW tcp PORT 44',
                     vm.uuid),
                 enabled: true
@@ -803,6 +813,7 @@ exports['all vms to local VM'] = function (t) {
         var addPayload = {
             rules: [
                 {
+                    owner_uuid: vm.owner_uuid,
                     rule: util.format(
                         'FROM ip 10.6.0.1 TO vm %s ALLOW tcp PORT 45', vm.uuid),
                     enabled: true
@@ -1002,60 +1013,6 @@ exports['owner_uuid filtering'] = function (t) {
 };
 
 
-exports['remote VM with same UUID as local VM'] = function (t) {
-    var vm = helpers.generateVM({ uuid: mod_uuid.v4() });
-    var rvm = helpers.generateVM({ uuid: vm.uuid });
-
-    var payload = {
-        remoteVMs: [rvm],
-        vms: [vm]
-    };
-
-    var errMsg = util.format(
-        'Remote VM "%s" must not have the same UUID as a local VM', vm.uuid);
-
-    async.series([
-    function (cb) {
-        fw.validatePayload(payload, function (err, res) {
-            t.ok(err, 'Error returned');
-            if (!err) {
-                return cb();
-            }
-
-            t.equal(err.message, errMsg, 'Error message');
-            return cb();
-        });
-
-    }, function (cb) {
-        fw.add(payload, function (err, res) {
-            t.ok(err, 'Error returned');
-            if (!err) {
-                return cb();
-            }
-
-            t.equal(err.message, errMsg, 'Error message');
-            return cb();
-        });
-
-    }, function (cb) {
-        fw.update(payload, function (err, res) {
-            t.ok(err, 'Error returned');
-            if (!err) {
-                return cb();
-            }
-
-            t.equal(err.message, errMsg, 'Error message');
-            return cb();
-        });
-
-    }
-
-    ], function () {
-            t.done();
-    });
-};
-
-
 exports['delete: different VMs than RVMs in rule'] = function (t) {
     var vms = [ helpers.generateVM(), helpers.generateVM() ];
     var rvms = [ helpers.generateVM(), helpers.generateVM() ];
@@ -1067,16 +1024,19 @@ exports['delete: different VMs than RVMs in rule'] = function (t) {
 
     var rules = [
         {
+            owner_uuid: vms[0].owner_uuid,
             rule: util.format('FROM vm %s TO vm %s ALLOW tcp PORT 80',
                 rvms[0].uuid, vms[0].uuid),
             enabled: true
         },
         {
+            owner_uuid: vms[0].owner_uuid,
             rule: util.format('FROM ip 10.2.0.2 TO vm %s ALLOW tcp PORT 81',
                 vms[1].uuid),
             enabled: true
         },
         {
+            owner_uuid: vms[0].owner_uuid,
             rule: util.format('FROM vm %s TO vm %s ALLOW tcp PORT 82',
                 rvms[1].uuid, vms[1].uuid),
             enabled: true
@@ -1210,6 +1170,72 @@ exports['delete: different VMs than RVMs in rule'] = function (t) {
     }
 
     ], function () {
+        t.done();
+    });
+};
+
+
+exports['invalid and missing parameters'] = function (t) {
+    var payload = {
+        vms: [ helpers.generateVM() ]
+    };
+
+    var missingIPs = helpers.generateVM();
+    delete missingIPs.nics;
+    delete missingIPs.ips;
+
+    var missingUUID = helpers.generateVM();
+    delete missingUUID.uuid;
+
+    var sameUUID = helpers.generateVM();
+    sameUUID.uuid = payload.vms[0].uuid;
+
+    var invalid = [
+        [ 'missing IPs', missingIPs, util.format(
+            'Remote VM "%s": missing IPs', missingIPs.uuid) ],
+
+        [ 'missing UUID', missingUUID, 'Remote VM must have UUID' ],
+
+        [ 'same UUID as local VM', sameUUID, util.format(
+            'Remote VM "%s" must not have the same UUID as a local VM',
+            sameUUID.uuid) ]
+    ];
+
+    async.forEachSeries(invalid, function (params, cb) {
+        var msg = params[0] + ': ';
+        var vm = params[1];
+        var errMsg = params[2];
+
+        payload.remoteVMs = [vm];
+
+        fw.validatePayload(payload, function (err) {
+            t.ok(err, msg + 'error returned');
+            if (err) {
+                t.equal(err.message, errMsg, msg + 'validate error message');
+                t.equal(err.details, vm, msg + 'validate error details');
+            }
+
+            fw.add(payload, function (err2) {
+                t.ok(err2, msg + 'add error returned');
+                if (err2) {
+                    t.equal(err2.message, errMsg, msg + 'add error message');
+                    t.equal(err2.details, vm, msg + 'add error details');
+                }
+
+                fw.update(payload, function (err3) {
+                    t.ok(err3, msg + 'update error returned');
+                    if (err3) {
+                        t.equal(err3.message, errMsg,
+                            msg + 'update error message');
+                        t.equal(err3.details, vm, msg + 'update error details');
+                    }
+
+                    return cb();
+                });
+            });
+        });
+
+    }, function () {
         t.done();
     });
 };

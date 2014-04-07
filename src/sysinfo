@@ -26,6 +26,7 @@ ZONENAME=$(zonename)
 FORCE=
 PARSABLE=
 UPDATE_ONLY=
+ZSTAT=
 
 while getopts fnpu? name
 do
@@ -223,11 +224,12 @@ function get_hostname()
 function get_zpool_disks()
 {
     local zpool=$1
+    local disks=$(/usr/bin/disklist -n)
+    ZSTAT=$(/usr/sbin/zpool status ${zpool} | awk '/[a-z]/{ print $1 }')
     Zpool_disks=
 
-    for disk in $(/usr/bin/disklist -n); do
-        local disk_in_pool=$(/usr/sbin/zpool status ${zpool} | grep ${disk})
-        if [[ -n ${disk_in_pool} ]]; then
+    for disk in ${disks}; do
+        if [[ "${ZSTAT}" =~ "${disk}" ]]; then
             Zpool_disks="${Zpool_disks},${disk}"
         fi
     done
@@ -242,7 +244,7 @@ function get_zpool_profile()
     Zpool_profile="striped"
 
     for profile in ${profiles[*]}; do
-        if [[ -n $(/usr/sbin/zpool status ${zpool} | grep ${profile}) ]]; then
+        if [[ "${ZSTAT}" =~ "${profile}" ]]; then
             Zpool_profile=${profile}
             break
         fi
@@ -386,6 +388,13 @@ function get_smartos_network_interfaces()
         # list of interfaces that are actually on the aggr, rather than
         # what's defined in the config file
         if [[ -n ${port} ]]; then
+            # If a nic is in an aggregation, its MAC address in the output of
+            # `dladm show-phys -m` (used above) will be the MAC of the first
+            # port in the aggregation.  Correct that here, so sysinfo will
+            # still show the underlying nic's MAC.
+            normalize_mac $(echo ${mac} | sed 's/\|/:/g')
+            eval "Network_Interface_${port}_MAC_Address=${normalized}"
+
             ag_count=1
             for aggr in "${Aggrs[@]}"; do
                 if [[ "${aggr}" == "${iface}" ]]; then

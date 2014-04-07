@@ -1,12 +1,98 @@
 # imgadm changelog
 
+## 2.6.7
+
+- [OS-2878] Fix 'imgadm import' broken in previous version.
+
+
+## 2.6.6
+
+Note: This was a bad version in which "imgadm import" was broken.
+Use version 2.6.7 or later.
+
+- Debug logging will include a "req_id", optionally taken from a `REQ_ID`
+  environment variable.
+
+- [OS-2203] 'imgadm import' and 'imgadm avail' will coordinate concurrent
+  attempts to import the same image, instead of having all but one of them
+  fail.
+
+
+## 2.6.5
+
+- [OS-2867] Add optional `config.userAgentExtra` for a string to append to
+  the User-Agent in IMGAPI client usage.
+
+
+## 2.6.4
+
+- [OS-2484] Support for incremental of incremental image creation. Added
+  --max-origin-depth to `imgadm create` to allow setting a limit in the number
+  of child incremental images for an image.
+
+
+## 2.6.3
+
+- [OS-2657] Fix an issue where an error message with a printf formatting char
+  could crash on error creation: loosing error details.
+
+
+## 2.6.2
+
+- [IMGAPI-312] `imgadm create` will set "requirements.min_platform" to the
+  current platform for *SmartOS* images, to ensure proper binary compatibility
+  -- in case the image includes binaries built on this platform.
+
+
+## 2.6.1
+
+- Include User-Agent header in requests to IMGAPI and DSAPI sources,
+  e.g. "imgadm/2.6.1 (node/0.8.26; OpenSSL/1.0.1d)".
+
+- [OS-2651] Fix 'imgadm create' wiping any given manifest.requirements.
+
+
+## 2.6.0
+
+- Change '-v, --verbose' option to mean *debug*-level logging (instead of
+  trace-level in v2.3.0-v2.5.0). Also add support for the
+  `IMGADM_LOG_LEVEL=<log level name>` environment variable, e.g.
+
+        IMGADM_LOG_LEVEL=trace imgadm create ...
+
+  Supported log level names are: trace, debug, info, warn (default), error,
+  fatal.
+
+- Improve debug logging for `imgadm create`.
+
+## 2.5.0
+
+- [OS-2600] `imgadm create -i ...` using a VM created from an *incremental*
+  image explicitly fails with NotSupported.
+
+- [OS-2550] `imgadm create -s <prepare-image-script> ...` support to automatic
+  running of a preparation script, gated by VM snapshotting and rollback for
+  safety. This makes image creation easier (fewer steps, do not need to
+  manually prepare and stop the VM) and safer (snapshot/rollback ensures an
+  unchanged and usable original VM on completion).
+
+## 2.4.0
+
+- Add `imgadm update [UUID...]` support for updating specific image uuids.
+
+- [OS-2490] `imgadm update` should ensure imported images' snapshot is named
+  `@final`
+
+- [OS-1999] `imgadm update` on already installed image should re-fetch manifest
+  for mutable field changes
+
 ## 2.3.1
 
 - [OS-2487] 'imgadm import' will now not complain about not being able to
   delete -partial dataset on rollback (because sometimes it really isn't
   there yet).
 
-- [OS-2488] Incremental imgadm creation (`imgadm create -i`) will not explcitly
+- [OS-2488] Incremental imgadm creation (`imgadm create -i`) will not explicitly
   fail if the origin image does not have a '@final' snapshot on the origin image.
   Images installed with imgadm v2.0.3 or later will have this but images installed
   prior to that may not.

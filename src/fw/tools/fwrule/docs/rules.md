@@ -1,17 +1,25 @@
 # Overview
 
-The base rule set for a VM is:
+The base policy for a VM with its firewall enabled is:
 
 * block all inbound traffic
 * allow all outbound traffic
 
 All firewall rules applied to a VM are applied on top of those defaults.
-Firewall rules can affect one VM or many through the use of the tag or
-all vms target types.
+Firewall rules can affect one VM (using the vm target) or many (using the
+tag or all vms target types).
 
 Adding and updating rules takes effect immediately.  Adding or removing
 tags on a VM causes rules that apply to those tags to be added or removed
 immediately.
+
+In the case of two rules that affect the same VM and port, the rule that
+goes counter to the default policy takes precedence.  This means:
+
+* If you have an incoming BLOCK and an incoming ALLOW rule for the
+  same VM and port, the ALLOW will override.
+* If you have an outgoing BLOCK and an outgoing ALLOW rule for the
+  same VM and port, the BLOCK will override.
 
 
 # Rule payload
@@ -30,8 +38,13 @@ The properties of this payload are:
   for the syntax.
 * **enabled** (boolean, optional): If set to true, the rule will be applied
   to VMs.  If set to false, the rule will be added but not applied.
+* **global** (boolean, optional): If set, the rule will be applied to all VMs
+  in the datacenter, regardless of owner.
 * **owner_uuid** (UUID, optional): If set, restricts the set of VMs that
   the rule can be applied to VMs owned by this UUID.
+
+Note that only one of **owner_uuid** or **global** can be set at a time for
+a rule.
 
 
 # Rule syntax
@@ -42,27 +55,41 @@ Firewall rules are in the following format:
 
 The parameters are the following:
 
-* from targets, to targets can be any of the following types (see the Target
-  Types section below):
-  * vm &lt;uuid>
-  * ip &lt;IP address>
-  * subnet &lt;subnet CIDR>
-  * tag &lt;tag name>
-  * tag &lt;tag name>=&lt;tag value>
-  * a target list of up to 32 of the above
-  * all vms
-  * any
-* action can be one of (see the Actions section below):
-  * ALLOW
-  * BLOCK
-* protocol can be one of (see the Protocols section below):
-  * tcp
-  * udp
-  * icmp
-* ports or types can be one of (see the Ports section below):
-  * port &lt;port number> (if protocol is tcp or udp)
-  * type &lt;ICMP type> (if protocol is icmp)
-  * type &lt;ICMP type> code &lt;ICMP code> (if protocol is icmp)
+**from targets** and **to targets** can be any of the following types
+(see the Target Types section below):
+
+* vm <uuid>
+* ip <IP address>
+* subnet <subnet CIDR>
+* tag <tag name>
+* tag <tag name>=<tag value>
+* a target list of up to 32 of the above
+* all vms
+* any
+
+**action** can be one of (see the Actions section below):
+
+* ALLOW
+* BLOCK
+
+**protocol** can be one of (see the Protocols section below):
+
+* tcp
+* udp
+* icmp
+
+**ports** or **types** can be one of (see the Ports section below):
+
+* port <port number> (if protocol is tcp or udp)
+* type <ICMP type> (if protocol is icmp)
+* type <ICMP type> code <ICMP code> (if protocol is icmp)
+
+
+The limits for the parameters are:
+
+* 24 from targets
+* 24 to targets
+* 8 ports or types
 
 
 # Target types
@@ -242,4 +269,25 @@ Allows ssh traffic between all VMs.
     FROM any TO all vms ALLOW tcp port 80
 
 Allow HTTP traffic from any host to all VMs.
+
+
+# Error Messages
+
+This section explains error messages.
+
+## rule does not affect VMs
+
+The rule you're trying to create doesn't contain any targets that will
+actually cause rules to be applied to VMs.  Targets that will cause rules
+to be applied are:
+
+* tag
+* vm
+* all vms
+
+Some examples of rules that would cause this message include:
+
+    FROM any TO any ALLOW tcp port 22
+
+    FROM ip 192.168.1.3 TO subnet 192.168.1.0/24 ALLOW tcp port 22
 

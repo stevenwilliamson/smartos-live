@@ -42,11 +42,16 @@ ronn-format.7
 man/man/man1m/vfsstat.1m
 man/man/man1m/ziostat.1m
 man/man/man1m/dsadm.1m
+man/man/man1m/fwadm.1m
 man/man/man1m/imgadm.1m
 man/man/man1m/nictagadm.1m
 man/man/man1m/vmadm.1m
 man/man/man1m/vmadmd.1m
 man/man/man1m/sysinfo.1m
+man/man/man1m/diskinfo.1m
+man/man/man1m/disklayout.1m
+man/man/man1m/mkzpool.1m
+man/man/man5/fwrule.5
 src/diskinfo
 src/disklayout
 src/mkzpool
@@ -59,6 +64,7 @@ src/node-zsock/build/
 src/node-zutil/.lock-wscript
 src/node-zutil/build/
 src/sdc-on-tty
+src/vm/node_modules/props.js
 tools/pwgen-2.06/Makefile
 tools/pwgen-2.06/autom4te.cache
 boot.manifest.gen

@@ -15,12 +15,12 @@
 
     imgadm list                         list installed images
     imgadm get [-P <pool>] <uuid>       info on an installed image
-    imgadm update                       gather info on unknown images
+    imgadm update [<uuid>...]           update installed images
     imgadm delete [-P <pool>] <uuid>    remove an installed image
 
     # Experimental.
-    imgadm create [-p <url>] <vm-uuid> [<manifest-field>=<value> ...]
-                                        create an image from a prepared VM
+    imgadm create <vm-uuid> [<manifest-field>=<value> ...] ...
+                                        create an image from a VM
     imgadm publish -m <manifest> -f <file> <imgapi-url>
                                         publish an image to an image repo
 
@@ -50,7 +50,8 @@ UUID.
     Print the imgadm version and exit.
 
 **-v, --verbose**
-    More verbose logging. Use multiple times for more verbosity.
+    More verbose logging (debug level). See the **IMGADM\_LOG\_LEVEL=<level>**
+    environment variable.
 
 
 ## SUBCOMMANDS
@@ -163,14 +164,23 @@ UUID.
                                Default is "zones".
 
 
-    imgadm update
+    imgadm update [<uuid>...]
 
-        Gather info on unknown images.
+        Update currently installed images, if necessary.
 
-        Images that are installed without "imgadm" (e.g. via "zfs recv") will
-        not have cached image manifest information. This command will attempt
-        to retrieve this information from current image sources based on
-        image UUID.
+        Images that are installed without "imgadm" (e.g. via "zfs recv")
+        not have cached image manifest information. Also, images installed
+        prior to imgadm version 2.0.3 will not have a "@final" snapshot
+        (preferred for provisioning and require for incremental image
+        creation, via "imgadm create -i ..."). This command will attempt
+        to retrieve manifest information and to ensure images have the correct
+        "@final" snapshot, using info from current image sources.
+
+        If no "<uuid>" is given, then update is run for all installed images.
+
+        Options:
+            -h, --help         Print this help and exit.
+            -n                 Do a dry-run (do not actually make changes).
 
 
     imgadm delete [-P <pool>] <uuid>
@@ -185,29 +195,37 @@ UUID.
             -P <pool>          Name of zpool from which to delete the image.
                                Default is "zones".
 
+    imgadm create [<options>] <vm-uuid> [<manifest-field>=<value> ...]
 
-    imgadm create [-p <url>] <vm-uuid> [<manifest-field>=<value> ...]
+        Create an image from the given VM and manifest data.
 
-        Create a new image from a prepared and stopped VM.
+        There are two basic calling modes: (1) a prepare-image script is
+        provided (via "-s") to have imgadm automatically run the script inside the
+        VM before image creation; or (2) the given VM is already "prepared" and
+        shutdown.
 
-        To create a new virtual image, one first creates a VM from an existing
-        image, customizes it, runs "sm-prepare-image", shuts it down, and
-        then runs this "imgadm create" to create the image file and manifest.
+        The former involves snapshotting the VM, running the prepare-image script
+        (via the SmartOS mdata operator-script facility), creating the image,
+        rolling back to the pre-prepared state. This is preferred because it is (a)
+        easier (fewer steps to follow for imaging) and (b) safe (gating with
+        snapshot/rollback ensures the VM is unchanged by imaging -- the preparation
+        script is typically destructive.
 
-        This will snapshot the VM, create a manifest and image file and
-        delete the snapshot. Optionally the image can be published directly
-        to a given image repository (IMGAPI) via "-p URL" (or that can be
-        done separately via "imgadm publish").
+        With the latter, one first creates a VM from an existing image, customizes
+        it, runs "sm-prepare-image" (or equivalent for KVM guest OSes), shuts it
+        down, runs this "imgadm create" to create the image file and manifest, and
+        finally destroys the "proto" VM.
 
-        Usage:
-            imgadm create [<options>] <vm-uuid> [<manifest-field>=<value> ...]
+        With either calling mode, the image can optionally be published directly
+        to a given image repository (IMGAPI) via "-p URL". This can also be
+        done separately via "imgadm publish".
 
         Options:
             -h, --help     Print this help and exit.
             -m <manifest>  Path to image manifest data (as JSON) to
                            include in the created manifest. Specify "-"
                            to read manifest JSON from stdin.
-            -o PATH, --output-template PATH
+            -o <path>, --output-template <path>
                            Path prefix to which to save the created manifest
                            and image file. By default "NAME-VER.imgmanifest
                            and "NAME-VER.zfs[.EXT]" are saved to the current
@@ -215,12 +233,27 @@ UUID.
                            to it. If the basename of "PATH" is not a dir,
                            then "PATH.imgmanifest" and "PATH.zfs[.EXT]" are
                            created.
-            -c COMPRESSION One of "none", "gz" or "bzip2" for the compression
+            -c <comp>      One of "none", "gz" or "bzip2" for the compression
                            to use on the image file, if any. Default is "none".
-            -i             Build an incremental image (based on the "@final"\n'
-                           snapshot of the source image for the VM).\n'
+            -i             Build an incremental image (based on the "@final"
+                           snapshot of the source image for the VM).
 
-            -p URL, --publish URL
+            --max-origin-depth <max-origin-depth>
+                           Maximum origin depth to allow when creating
+                           incremental images. E.g. a value of 3 means that
+                           the image will only be created if there are no more
+                           than 3 parent images in the origin chain.
+
+            -s <prepare-image-path>
+                           Path to a script that is run inside the VM to
+                           prepare it for imaging. Specifying this triggers the
+                           full snapshot/prepare-image/create-image/rollback
+                           automatic image creation process (see notes above).
+                           There is a contract with "imgadm" that a
+                           prepare-image script must follow. See the "PREPARE
+                           IMAGE SCRIPT" section in "man imgadm".
+
+            -p <url>, --publish <url>
                            Publish directly to the given image source
                            (an IMGAPI server). You may not specify both
                            "-p" and "-o".
@@ -238,41 +271,93 @@ UUID.
                            will be strings.
 
         Examples:
+            # Create an image from VM 5f7a53e9-fc4d-d94b-9205-9ff110742aaf.
+            echo '{"name": "foo", "version": "1.0.0"}' \
+                | imgadm create -m - -s /path/to/prepare-image \
+                    5f7a53e9-fc4d-d94b-9205-9ff110742aaf
+
+            # Specify manifest data as arguments.
+            imgadm create -s prep-image 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \
+                name=foo version=1.0.0
+
+            # Write the manifest and image file to "/var/tmp".
+            imgadm create -s prep-image 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \
+                name=foo version=1.0.0 -o /var/tmp
+
+            # Publish directly to an image repository (IMGAPI server).
+            imgadm create -s prep-image 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \
+                name=foo version=1.0.0 --publish https://images.example.com
+
             # Create an image from the prepared and shutdown VM
             # 5f7a53e9-fc4d-d94b-9205-9ff110742aaf, using some manifest JSON
             # data from stdin.
             echo '{"name": "foo", "version": "1.0.0"}' \
                 | imgadm create -m - 5f7a53e9-fc4d-d94b-9205-9ff110742aaf
 
-            # Specify manifest data as arguments.
-            imgadm create 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \
-                name=foo version=1.0.0
 
-            # Write the manifest and image file to "/var/tmp".
-            imgadm create 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \
-                name=foo version=1.0.0 -o /var/tmp
+    imgadm publish [<options>] -m <manifest> -f <file> <imgapi-url>
 
-            # Publish directly to an image repository (IMGAPI server).
-            imgadm create 5f7a53e9-fc4d-d94b-9205-9ff110742aaf \
-                name=foo version=1.0.0 --publish https://images.example.com
-
-    imgadm publish
-
-        **Experimental.** Publish an image from local manifest and image
-        data files.
+        Publish an image (local manifest and data) to a remote IMGAPI repo.
 
         Typically the local manifest and image file are created with
         "imgadm create ...". Note that "imgadm create" supports a
         "-p/--publish" option to publish directly in one step.
-
-        Usage:
-            imgadm publish [<options>] -m <manifest> -f <file> <imgapi-url>
+        Limitation: This does not yet support *authentication* that some
+        IMGAPI image repositories require.
 
         Options:
             -h, --help         Print this help and exit.
             -m <manifest>      Required. Path to the image manifest to import.
             -f <file>          Required. Path to the image file to import.
             -q, --quiet        Disable progress bar.
+
+
+## PREPARE IMAGE SCRIPT
+
+Image creation basically involves a `zfs send` of a customized *and prepared*
+VM to a file for use in creating new VMs (along with a manifest file that
+captures metadata about the image). "Customized" means software in the VM
+is installed and setup as desired. "Prepared" means that the VM is cleaned up
+(e.g. host keys removed, log files removed or truncated, hardcoded IP
+information removed) and tools required for VM creation (e.g. zoneinit in
+SmartOS VMs, guest tools for Linux and Windows OSes) are layed down.
+
+As described above "imgadm create" has two modes: one where a prepare-image
+script is given for "imgadm create" to run (gated by VM snapshotting and
+rollback for safety); and another where one manually prepares and stops a VM
+before calling "imgadm create". This section describes prepare-image and guest
+requirements for the former.
+
+The given prepare-image script is run via the SmartOS mdata
+"sdc:operator-script" facility. This requires the guest tools in the VM to
+support "sdc:operator-script" (SmartOS zones running on SDC 7.0 platforms
+with OS-2515, from 24 Sep 2013, support this.)
+
+For orderly VM preparation, a prepare-image script must implement the following
+contract:
+
+1. The script starts out by setting:
+
+        mdata-put prepare-image:state running
+
+2. On successful completion it sets:
+
+        mdata-put prepare-image:state success
+
+3. On error it sets:
+
+        mdata-put prepare-image:state error
+        mdata-put prepare-image:error '... some error details ...'
+
+   These are not *required* as, obviously, `imgadm create`
+   needs to reliably handle a prepare-image script *crash*. However setting
+   these enables `imgadm create` to fail fast.
+
+4. Shutdown the VM when done.
+
+Preparing a VM for imaging is meant to be a quick activity. By
+default there is a 5 minute timeout on state transitions: (VM booted) -> running
+-> success or error -> (VM stopped).
 
 
 ## COMPATIBILITY NOTES
@@ -306,6 +391,15 @@ compatibility differences with earlier imgadm. These are:
 
         Set to 1 to allow an imgadm source URL that uses HTTPS to a server
         without a valid SSL certificate.
+
+    IMGADM_LOG_LEVEL
+
+        Set the level at which imgadm will log to stderr. Supported levels are
+        "trace", "debug", "info", "warn" (default), "error", "fatal".
+
+    REQ_ID
+
+        If provided, this value is used for imgadm's logging.
 
 
 ## EXIT STATUS

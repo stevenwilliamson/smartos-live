@@ -82,6 +82,7 @@ function _log(level, num, obj) {
 
 function createLogger() {
     return {
+        child: function () { return this; },
         trace: function () { return _log('trace', 10, arguments); },
         debug: function () { return _log('debug', 20, arguments); },
         info: function () { return _log('info', 30, arguments); },
@@ -91,6 +92,7 @@ function createLogger() {
     };
 }
 
+
 function errSerializer(err) {
     return err;
 }
@@ -98,6 +100,11 @@ function errSerializer(err) {
 
 function mockRingBuffer(opts) {
     this.opts = opts;
+}
+
+
+function resolveLevel() {
+    return 3;
 }
 
 
@@ -113,26 +120,26 @@ function mockRingBuffer(opts) {
 function _recordIPFstate(args) {
     var zone = createSubObjects(VALUES.ipf, args[args.length - 1]);
 
-    if (args[0] == '-D') {
+    if (args[0] == '-GD') {
         zone.enabled = false;
         zone.inactive = '';
         zone.active = '';
         return;
     }
 
-    if (args[0] == '-E') {
+    if (args[0] == '-GE') {
         zone.enabled = true;
         zone.inactive = '';
         zone.active = '';
         return;
     }
 
-    if (args[0] == '-IFa') {
+    if (args[0] == '-GIFa') {
         zone.inactive = '';
         return;
     }
 
-    if (args[0] == '-s') {
+    if (args[1] == '-s') {
         var active = zone.active || '';
         var inactive = zone.inactive || '';
         zone.active = inactive;
@@ -140,9 +147,9 @@ function _recordIPFstate(args) {
         return;
     }
 
-    if (args[0] == '-I' && args[1] == '-f') {
+    if (args[1] == '-I' && args[2] == '-f') {
         var root = VALUES.fs;
-        var p = _splitFile(args[2]);
+        var p = _splitFile(args[3]);
         if (!root.hasOwnProperty(p.dir)
                 || !root[p.dir].hasOwnProperty(p.file)) {
             throw _ENOENT(p.file);
@@ -272,6 +279,16 @@ mkdirp.sync = function mkdirpSync(dir) {
 
 
 
+// --- path
+
+
+
+function basename(file) {
+    return file;
+}
+
+
+
 // --- Setup / Teardown
 
 
@@ -319,33 +336,16 @@ function setup() {
         return fw;
     }
 
-    // Mock out process.pid, but keep the rest of the process
-    // object the same
-    if (!ORIG_PROCESS) {
-        ORIG_PROCESS = process;
-        PID = process.pid;
-        process = {
-            get pid() {
-                return PID++;
-            }
-        };
-        for (var p in ORIG_PROCESS) {
-            if (p.name === 'pid') {
-                continue;
-            }
-            process[p] = ORIG_PROCESS[p];
-        }
-    }
-
     resetValues();
     mockery.enable();
     var modules = {
-        '/usr/node/node_modules/bunyan': {
+        bunyan: {
             createLogger: createLogger,
             RingBuffer: mockRingBuffer,
             stdSerializers: {
                 err: errSerializer
-            }
+            },
+            resolveLevel: resolveLevel
         },
         child_process: {
             execFile: execFile
@@ -359,6 +359,7 @@ function setup() {
         },
         mkdirp: mkdirp,
         path: {
+            basename: basename
         }
     };
 
@@ -370,10 +371,11 @@ function setup() {
         'assert',
         'assert-plus',
         'clone',
+        'events',
         'extsprintf',
         'fwrule',
-        'node-uuid',
         'net',
+        'node-uuid',
         'stream',
         'vasync',
         'verror',
@@ -386,6 +388,7 @@ function setup() {
         './pipeline',
         './rule',
         './rvm',
+        './util/errors',
         './util/log',
         './util/obj',
         './util/vm',

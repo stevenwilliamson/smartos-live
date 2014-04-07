@@ -83,6 +83,8 @@ function brand_test(brand, image, t) {
                 t.equal(obj.brand, brand, 'created with brand ' + brand);
                 state.nics = obj.nics;
 
+                t.ok(obj.nics[0].primary, 'net0 is primary');
+
                 for (n in obj.nics) {
                     n = obj.nics[n];
                     if (n.ip == ips[3]) {
@@ -217,6 +219,8 @@ function brand_test(brand, image, t) {
                     t.ok(obj.nics[0].allow_ip_spoofing,
                       'net0: ip spoofing enabled');
 
+                    t.ok(obj.nics[0].primary, 'net0 is still primary');
+
                     // net1
                     t.ok(obj.nics[1].hasOwnProperty('allow_dhcp_spoofing'),
                         'net1: allow_dhcp_spoofing property set');
@@ -326,6 +330,8 @@ function brand_test(brand, image, t) {
                     t.ok(obj.nics[0].allow_ip_spoofing,
                       'net0: ip spoofing enabled');
 
+                    t.ok(obj.nics[0].primary, 'net0 is still primary');
+
                     // net1 - should now have dhcp spoofing disabled
                     t.ok(obj.nics[1].hasOwnProperty('allow_dhcp_spoofing'),
                         'allow_dhcp_spoofing property set');
@@ -385,7 +391,7 @@ function brand_test(brand, image, t) {
 
         }, function (cb) {
             // The changes should persist across reboots
-            VM.reboot(state.uuid, {}, function(err) {
+            VM.reboot(state.uuid, {force: true}, function(err) {
                 if (err) {
                     t.ok(false, 'VM reboot: ' + err.message);
                     return cb(err);
@@ -412,6 +418,8 @@ function brand_test(brand, image, t) {
                       'net0: mac spoofing enabled');
                     t.ok(obj.nics[0].allow_ip_spoofing,
                       'net0: ip spoofing enabled');
+
+                    t.ok(obj.nics[0].primary, 'net0 is still primary');
 
                     // net1 - should still be the same
                     t.ok(obj.nics[1].hasOwnProperty('allow_dhcp_spoofing'),

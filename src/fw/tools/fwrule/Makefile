@@ -20,7 +20,7 @@
 #
 # CDDL HEADER END
 #
-# Copyright (c) 2013, Joyent, Inc. All rights reserved.
+# Copyright (c) 2014, Joyent, Inc. All rights reserved.
 #
 #
 # fwrule Makefile
@@ -32,6 +32,7 @@
 #
 JISON	:= ./node_modules/jison/lib/cli.js
 NODEUNIT := node_modules/nodeunit/bin/nodeunit
+RAMSEY := node_modules/ramsey/bin/ramsey
 NPM := npm
 JS_FILES	:= $(shell find lib test -name '*.js' | grep -v parser.js)
 JSL_CONF_NODE	 = tools/jsl.node.conf
@@ -57,6 +58,9 @@ $(NODEUNIT):
 $(JISON):
 	$(NPM) install
 
+$(RAMSEY):
+	$(NPM) install
+
 
 #
 # test / check targets
@@ -64,11 +68,22 @@ $(JISON):
 
 .PHONY: test
 test: $(NODEUNIT)
-	@$(NODEUNIT) --reporter tap test/*.js
+	@(for F in test/*.js; do \
+		echo "# $$F" ;\
+		$(NODEUNIT) --reporter tap $$F ;\
+		[[ $$? == "0" ]] || exit 1; \
+	done)
 
 .PHONY: check
 check: check-jsl check-jsstyle
 	@echo check ok
+
+.PHONY: prepush
+prepush: check test
+
+.PHONY: docs
+docs: $(RAMSEY) docs/examples.md.in
+	$(RAMSEY) -d etc/examples -f etc/examples.json docs/examples.md.in docs/examples.md
 
 #
 # This rule enables other rules that use files from a git submodule to have

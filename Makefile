@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+# Copyright (c) 2014, Joyent, Inc.  All rights reserved.
 #
 
 ROOT =		$(PWD)
@@ -24,6 +24,15 @@ BOOT_MANIFEST =	boot.manifest.gen
 JSSTYLE =	$(ROOT)/tools/jsstyle/jsstyle
 JSLINT =	$(ROOT)/tools/javascriptlint/build/install/jsl
 CSTYLE =	$(ROOT)/tools/cstyle
+
+CTFBINDIR = \
+	$(ROOT)/projects/illumos/usr/src/tools/proto/*/opt/onbld/bin/i386
+CTFMERGE =	$(CTFBINDIR)/ctfmerge
+CTFCONVERT =	$(CTFBINDIR)/ctfconvert
+
+SUBDIR_DEFS = \
+	CTFMERGE=$(CTFMERGE) \
+	CTFCONVERT=$(CTFCONVERT)
 
 ADJUNCT_TARBALL :=	$(shell ls `pwd`/illumos-adjunct*.tgz 2>/dev/null \
 	| tail -n1 && echo $?)
@@ -103,8 +112,7 @@ $(MPROTO)/illumos-extra.manifest: 1-extra-stamp | $(MPROTO)
 	gmake DESTDIR=$(MPROTO) DESTNAME=illumos-extra.manifest \
 	    -C projects/illumos-extra manifest; \
 
-.PHONY: $(MPROTO)/%.sd.manifest
-$(MPROTO)/%.sd.manifest:
+$(MPROTO)/%.sd.manifest: projects/local/%/Makefile projects/local/%/manifest
 	cd $(ROOT)/projects/local/$* && \
 	    if [[ -f Makefile.joyent ]]; then \
 		gmake DESTDIR=$(MPROTO) DESTNAME=$*.sd.manifest \
@@ -150,12 +158,13 @@ update-base:
 0-local-stamp: $(LOCAL_SUBDIRS:%=0-subdir-%-stamp)
 	touch $@
 
-0-subdir-%-stamp:
+0-subdir-%-stamp: 0-illumos-stamp
 	cd "$(ROOT)/projects/local/$*" && \
 	    if [[ -f Makefile.joyent ]]; then \
-		gmake -f Makefile.joyent DESTDIR=$(PROTO) world install; \
+		gmake -f Makefile.joyent $(SUBDIR_DEFS) DESTDIR=$(PROTO) \
+		    world install; \
 	    else \
-		gmake DESTDIR=$(PROTO) world install; \
+		gmake $(SUBDIR_DEFS) DESTDIR=$(PROTO) world install; \
 	    fi
 	touch $@
 
@@ -179,10 +188,10 @@ update-base:
 	    gmake DESTDIR=$(PROTO) install)
 	touch $@
 
-0-livesrc-stamp: src/bootparams.c
+0-livesrc-stamp: 0-illumos-stamp 0-extra-stamp 1-extra-stamp
 	(cd $(ROOT)/src && \
-	    gmake DESTDIR=$(PROTO) && \
-	    gmake DESTDIR=$(PROTO) install)
+	    gmake NATIVEDIR=$(STRAP_PROTO) DESTDIR=$(PROTO) && \
+	    gmake NATIVEDIR=$(STRAP_PROTO) DESTDIR=$(PROTO) install)
 	touch $@
 
 0-man-stamp:
@@ -214,8 +223,8 @@ check: $(JSLINT)
 	@(cd $(ROOT)/src && make check)
 
 clean:
-	rm -f $(MANIFEST)
-	rm -rf $(ROOT)/$(MPROTO)/*
+	rm -f $(MANIFEST) $(BOOT_MANIFEST)
+	rm -rf $(MPROTO)/* $(BOOT_MPROTO)/*
 	(cd $(ROOT)/src && gmake clean)
 	[ ! -d $(ROOT)/projects/illumos-extra ] || \
 	    (cd $(ROOT)/projects/illumos-extra && gmake clean)
