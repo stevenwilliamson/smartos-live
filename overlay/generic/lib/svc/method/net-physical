@@ -222,6 +222,9 @@ if smf_is_globalzone; then
         echo "nameserver 8.8.8.8" >  /etc/resolv.conf
         echo "nameserver 8.8.4.4" >> /etc/resolv.conf
 
+        # Done setting up fallback exit with 0
+        exit 0
+
       else
         echo "ERROR: admin NIC not found, and couldn't find any links to bring up."
         exit ${SMF_EXIT_ERR_CONFIG}
