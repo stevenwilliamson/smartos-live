@@ -808,15 +808,7 @@ CLI.prototype.do_avail = function do_avail(subcmd, opts, args, callback) {
             'unexpected args: ' + args.join(' ')));
         return;
     }
-    var filterOpts = {};
-    if (opts.marker) {
-        assertUuid(opts.marker);
-        filterOpts.marker = opts.marker;
-    }
-    if (opts.limit) {
-        filterOpts.limit = opts.limit;
-    }
-    self.tool.sourcesList(filterOpts, function (err, imagesInfo) {
+    self.tool.sourcesList(function (err, imagesInfo) {
         // Even if there was an err, we still attempt to return results
         // for working sources.
         if (opts.json) {
@@ -863,11 +855,6 @@ CLI.prototype.do_avail.description = (
     + '                       "uuid,name,version,os,published".\n'
     + '    -s field1,...      Sort on the given fields. Default is\n'
     + '                       "published_at,name".\n'
-    + '    -m, --marker       Only list images that were created after the\n'
-    + '                       marker image creation date. The marker must be\n'
-    + '                       an image UUID.\n'
-    + '    -l, --limit        Maximum number of images to return. Images are\n'
-    + '                       sorted by creation date (ASC) by default.\n'
     + '\n'
     + textWrap('Valid fields for "-o" and "-s" are: '
         + availValidFields.join(', ') + '.') + '\n'
@@ -876,17 +863,13 @@ CLI.prototype.do_avail.longOpts = {
     'json': Boolean,
     'skipHeader': Boolean,
     'output': String,
-    'sort': String,
-    'marker': String,
-    'limit': Number
+    'sort': String
 };
 CLI.prototype.do_avail.shortOpts = {
     'j': ['--json'],
     'H': ['--skipHeader'],
     'o': ['--output'],
-    's': ['--sort'],
-    'm': ['--marker'],
-    'l': ['--limit']
+    's': ['--sort']
 };
 CLI.prototype.do_avail.aliases = ['available'];
 
@@ -1003,7 +986,11 @@ CLI.prototype.do_show = function do_show(subcmd, opts, args, callback) {
     }
     var uuid = args[0];
     assertUuid(uuid);
-    self.tool.sourcesGet(uuid, false, function (err, imageInfo) {
+    var getOpts = {
+        uuid: uuid,
+        ensureActive: false
+    };
+    self.tool.sourcesGet(getOpts, function (err, imageInfo) {
         if (err) {
             callback(err);
             return;
@@ -1160,7 +1147,11 @@ CLI.prototype.do_import = function do_import(subcmd, opts, args, callback) {
         }
 
         // 2. Find this image in the sources.
-        self.tool.sourcesGet(uuid, true, function (sGetErr, imageInfo) {
+        var getOpts = {
+            uuid: uuid,
+            ensureActive: true
+        };
+        self.tool.sourcesGet(getOpts, function (sGetErr, imageInfo) {
             if (sGetErr) {
                 callback(sGetErr);
                 return;

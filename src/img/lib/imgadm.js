@@ -1077,7 +1077,7 @@ IMGADM.prototype.getImage = function getImage(options, callback) {
  *      will still contain results. This is so that an error in one source
  *      does not break everything.
  */
-IMGADM.prototype.sourcesList = function sourcesList(filterOpts, callback) {
+IMGADM.prototype.sourcesList = function sourcesList(callback) {
     var self = this;
     var errs = [];
     var imageSetFromSourceUrl = {};
@@ -1089,21 +1089,83 @@ IMGADM.prototype.sourcesList = function sourcesList(filterOpts, callback) {
     async.forEach(
         self.sources,
         function oneSource(source, next) {
-            self.clientFromSource(source, function (cErr, client) {
+            var limit, marker;
+            var images = [];
+            var stop = false;
+            var client;
+
+            self.clientFromSource(source, function (cErr, _client) {
                 if (cErr) {
                     errs.push(cErr);
                     next();
                     return;
                 }
-                client.listImages(filterOpts, function (listErr, images) {
+
+                client = _client;
+                async.doWhilst(listImagesFromSource,
+                    function testAllImagesFetched() {
+                        return !stop;
+                    },
+                    function doneOneSource(whilstErr) {
+                        imageSetFromSourceUrl[source.url] = images;
+                        return next();
+                    }
+                );
+            });
+
+            function listImagesFromSource(whilstNext) {
+                var filterOpts = {};
+                // These options are passed once they are set for the first time
+                if (marker) {
+                    filterOpts.marker = marker;
+                }
+                if (limit) {
+                    filterOpts.limit = limit;
+                }
+
+                client.listImages(filterOpts, function (listErr, sImages, res) {
                     if (listErr) {
                         errs.push(self._errorFromClientError(
                             source.url, listErr));
+                        stop = true;
+                        return whilstNext();
                     }
-                    imageSetFromSourceUrl[source.url] = images || [];
-                    next();
+                    // On every query we do this:
+                    // - check if result size is less than limit (stop)
+                    // - if we have to keep going set a new marker,
+                    //   otherwise shift() because the first element is
+                    //   our marker
+                    // - concat to full list of images
+                    if (!limit) {
+                        limit = res.headers['x-query-limit'] || 1000;
+                    }
+                    if (sImages.length < limit) {
+                        stop = true;
+                    }
+                    // No marker means this is the first query and we
+                    // shouldn't shift() the array
+                    if (marker) {
+                        sImages.shift();
+                    }
+                    // We hit this when we either reached an empty page of
+                    // results or an empty first result
+                    if (!sImages.length) {
+                        stop = true;
+                        return whilstNext();
+                    }
+                    // Safety check if remote server doesn't support limit
+                    // and marker yet. In this case we would be iterating
+                    // over the same list of /images
+                    var newMarker = sImages[sImages.length - 1].uuid;
+                    if (marker && marker === newMarker) {
+                        stop = true;
+                        return whilstNext();
+                    }
+                    marker = newMarker;
+                    images = images.concat(sImages);
+                    return whilstNext();
                 });
-            });
+            }
         },
         function done(err) {
             if (!err && errs.length) {
@@ -1138,17 +1200,24 @@ IMGADM.prototype.sourcesList = function sourcesList(filterOpts, callback) {
 /**
  * Get info (mainly manifest data) on the given image UUID from sources.
  *
- * @param uuid {String}
- * @param ensureActive {Boolean} Set to true to skip inactive images.
+ * @param options {Object}
+ *      - @param uuid {String} Required. The image UUID to get.
+ *      - @param ensureActive {Boolean} Required. Set to true to skip inactive
+ *        images.
+ *      - @param sources {Array} Optional. An optional override to the set
+ *        of sources to search. Defaults to `self.sources`.
  * @param callback {Function} `function (err, imageInfo)` where `imageInfo`
  *      is `{manifest: <manifest>, source: <source>}`
  */
-IMGADM.prototype.sourcesGet
-        = function sourcesGet(uuid, ensureActive, callback) {
-    assert.string(uuid, 'uuid');
-    assert.bool(ensureActive, 'ensureActive');
+IMGADM.prototype.sourcesGet = function sourcesGet(options, callback) {
+    assert.object(options, 'options');
+    assert.string(options.uuid, 'options.uuid');
+    assert.bool(options.ensureActive, 'options.ensureActive');
+    assert.optionalArrayOfObject(options.sources, 'options.sources');
     assert.func(callback, 'callback');
     var self = this;
+    var uuid = options.uuid;
+    var ensureActive = options.ensureActive;
     var errs = [];
 
     if (self.sources.length === 0) {
@@ -1158,7 +1227,7 @@ IMGADM.prototype.sourcesGet
 
     var imageInfo = null;
     async.forEachSeries(
-        self.sources,
+        options.sources || self.sources,
         function oneSource(source, next) {
             if (imageInfo) {
                 next();
@@ -1479,11 +1548,19 @@ IMGADM.prototype._installImage = function _installImage(options, callback) {
                 assert.ok(options.source);
 
                 logCb(format('Origin image %s is not installed: '
-                    + 'searching sources', manifest.origin));
-                self.sourcesGet(manifest.origin, true,
-                        function (err, originInfo) {
+                    + 'searching source', manifest.origin));
+                var getOpts = {
+                    uuid: manifest.origin,
+                    ensureActive: true,
+                    sources: [imageInfo.source]
+                };
+                self.sourcesGet(getOpts, function (err, originInfo) {
                     if (err) {
                         next(err);
+                        return;
+                    } else if (!originInfo) {
+                        next(new errors.OriginNotFoundInSourceError(
+                            manifest.origin, imageInfo.source));
                         return;
                     }
                     logCb(format('Importing origin image %s (%s %s) from "%s"',
@@ -1869,6 +1946,10 @@ IMGADM.prototype._installImage = function _installImage(options, callback) {
                 }
             },
             function releaseLock(next) {
+                if (!unlock) {
+                    next();
+                    return;
+                }
                 log.debug({lockPath: lockPath}, 'releasing lock');
                 unlock(function (unlockErr) {
                     if (unlockErr) {
@@ -1984,7 +2065,11 @@ IMGADM.prototype.updateImages = function updateImages(options, callback) {
         var snapshots;
         async.series([
             function getSourceInfo(next) {
-                self.sourcesGet(uuid, true, function (sGetErr, sImageInfo) {
+                var getOpts = {
+                    uuid: uuid,
+                    ensureActive: true
+                };
+                self.sourcesGet(getOpts, function (sGetErr, sImageInfo) {
                     if (sGetErr) {
                         next(sGetErr);
                         return;
