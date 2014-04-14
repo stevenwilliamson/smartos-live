@@ -32,20 +32,36 @@ hashtable_iterator(struct hashtable *h);
 /* hashtable_iterator_key
  * - return the value of the (key,value) pair at the current position */
 
+#ifdef __sun
 static inline void *
 hashtable_iterator_key(struct hashtable_itr *i)
 {
     return i->e->k;
 }
+#else
+extern inline void *
+hashtable_iterator_key(struct hashtable_itr *i)
+{
+    return i->e->k;
+}
+#endif
 
 /*****************************************************************************/
 /* value - return the value of the (key,value) pair at the current position */
 
+#ifdef __sun
 static inline void *
 hashtable_iterator_value(struct hashtable_itr *i)
 {
     return i->e->v;
 }
+#else
+extern inline void *
+hashtable_iterator_value(struct hashtable_itr *i)
+{
+    return i->e->v;
+}
+#endif
 
 /*****************************************************************************/
 /* advance - advance the iterator to the next element
