@@ -105,7 +105,7 @@ var smartos_payload = {
         );
     });
 
-    test('delete ' + thing_name, function(t) {
+    test('delete after sending ' + thing_name, function(t) {
         if (abort) {
             t.ok(false, 'skipping send as test run is aborted.');
             t.end();
@@ -179,7 +179,7 @@ var smartos_payload = {
                                     t.ok(true, 'Zone went to state: ' + obj.state);
 
                                     for (prop in vmobj) {
-                                        if (['last_modified', 'zoneid'].indexOf(prop) !== -1) {
+                                        if (['boot_timestamp', 'last_modified', 'pid', 'zoneid'].indexOf(prop) !== -1) {
                                             // we expect these properties to be different.
                                             continue;
                                         }
@@ -211,7 +211,7 @@ var smartos_payload = {
         );
     });
 
-    test('delete ' + thing_name, function(t) {
+    test('delete after receiving ' + thing_name, function(t) {
         if (abort) {
             t.ok(false, 'skipping send as test run is aborted.');
             t.end();

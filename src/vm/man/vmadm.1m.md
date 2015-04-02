@@ -1,4 +1,4 @@
-vmadm(1m) -- Manage SmartOS virtual machines
+vmadm(1M) -- Manage SmartOS virtual machines
 ============================================
 
 ## SYNOPSIS
@@ -103,7 +103,7 @@ tab-complete UUIDs rather than having to type them out for every command.
       info <uuid> [type,...]
 
         The info command operates on running KVM VMs only. It talks to the
-        vmadmd(1m) daemon and requests some information about the running VM.
+        vmadmd(1M) daemon and requests some information about the running VM.
         The information is output to stdout as a JSON object with member
         objects for each type specified. If no types are specified, all info
         is included. The type values can be separated either by commas or
@@ -587,6 +587,17 @@ tab-complete UUIDs rather than having to type them out for every command.
         update: yes
         default: 'order=cd'
 
+    boot_timestamp:
+
+        This is a read-only property that will exist only for running VMs. When
+        available, it will indicate the time the VM last booted.
+
+        type: string (ISO 8601 timestamp)
+        vmtype: OS,KVM
+        listable: yes
+        create: no
+        update: no
+
     brand:
 
         This will be one of 'joyent', 'joyent-minimal' or 'sngl' for OS
@@ -669,8 +680,13 @@ tab-complete UUIDs rather than having to type them out for every command.
         This field allows metadata to be set and associated with this VM. The
         value should be an object with only top-level key=value pairs.
 
-        NOTE: for historical reasons, do not put keys in here that match the
+        NOTE1: for historical reasons, do not put keys in here that match the
         pattern *_pw. Those keys should go in internal_metadata instead.
+
+        NOTE2: keys that are prefixed with one of the prefixes listed in
+        internal_metadata_namespaces will not be read from customer_metadata but
+        rather from internal_metadata. These will also be read-only from within
+        the zone.
 
         type: JSON Object (key: value)
         vmtype: OS,KVM
@@ -678,22 +694,6 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: yes (but see special notes on update command)
         default: {}
-
-    image_uuid:
-
-        This should be a UUID identifying the image for the VM if a VM was
-        created from an image.
-
-        NOTE: when this is passed for KVM VMs, it specifies the *zone root*
-        dataset which is not visible from within the VM. The user-visible
-        dataset will be the one specified through the disks.*.image_uuid.
-        Normally you do *not* want to set this for KVM.
-
-        type: string (UUID)
-        vmtype: OS,KVM
-        listable: yes
-        create: yes
-        update: no
 
     datasets:
 
@@ -1011,7 +1011,7 @@ tab-complete UUIDs rather than having to type them out for every command.
     firewall_enabled:
 
         This enables the firewall for this VM, allowing firewall rules set
-        by fwadm(1m) to be applied.
+        by fwadm(1M) to be applied.
 
         Note: this property will only show up in a 'vmadm get' when it's set
         true. When set false the property will not appear.
@@ -1048,6 +1048,22 @@ tab-complete UUIDs rather than having to type them out for every command.
         update: yes (but does nothing for OS VMs)
         default: the value of zonename
 
+    image_uuid:
+
+        This should be a UUID identifying the image for the VM if a VM was
+        created from an image.
+
+        NOTE: when this is passed for KVM VMs, it specifies the *zone root*
+        dataset which is not visible from within the VM. The user-visible
+        dataset will be the one specified through the disks.*.image_uuid.
+        Normally you do *not* want to set this for KVM.
+
+        type: string (UUID)
+        vmtype: OS,KVM
+        listable: yes
+        create: yes
+        update: no
+
     internal_metadata:
 
         This field allows metadata to be set and associated with this VM. The
@@ -1068,6 +1084,20 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: yes (but see special notes on update command)
         default: {}
+
+    internal_metadata_namespaces:
+
+        This allows a list of namespaces to be set as internal_metadata-only
+        prefixes. If a namespace 'foo' is in this list, metadata keys with the
+        prefix 'foo:' will come from internal_metadata rather than
+        customer_metadata. They will also be read-only from within the zone.
+
+        type: list of strings
+        vmtype: OS,KVM
+        listable: no
+        create: yes
+        update: yes
+        default: []
 
     indestructible_delegated:
 
@@ -1314,8 +1344,10 @@ tab-complete UUIDs rather than having to type them out for every command.
 
         This sets additional IP addresses from which this nic is allowed to
         send traffic, in addition to the IPs in the ip and vrrp_primary_ip
-        properties (if set). Values can be either single IPv4 Addresses or
-        CIDR ranges in the form 192.168.1.0/24.
+        properties (if set). Values may be single IPv4 or IPv6 addresses
+        or IPv4 and IPv6 CIDR ranges. The following are all valid
+        examples of allowed_ips: '10.169.0.0/16', '10.99.99.7',
+        'fe82::/15', '2600:3c00::f03c:91ff:fe96:a267'.
 
         type: array (of IP addresses or CIDR ranges)
         vmtype: OS,KVM
@@ -1389,6 +1421,23 @@ tab-complete UUIDs rather than having to type them out for every command.
         create: yes
         update: yes
         default: the value of the nic_driver property on the VM
+
+    nics.*.mtu:
+
+        Sets the MTU for the network interface. The maximum MTU for a device is
+        determined based on its nic tag. If this property is not set, then it
+        defaults to the current MTU of the data link that the nic tag
+        corresponds to. The supported range of MTUs is from 1500-9000 for
+        VMs created on physical nics, and 576-9000 for VMs created on
+        etherstubs or overlays.  This property is not updated live with vmadm
+        update. If a specific MTU has not been requested, then this property
+        is not present through get.
+
+        type: integer
+        vmtype: OS
+        listable: no
+        create: yes
+        update: yes
 
     nics.*.netmask
 
@@ -1531,11 +1580,11 @@ tab-complete UUIDs rather than having to type them out for every command.
 
     pid:
 
-        For KVM VMs that are currently running, this field indicates the PID of
-        the qemu process for the zone.
+        For VMs that are currently running, this field indicates the PID of the
+        `init` process for the zone.
 
         type: integer (PID)
-        vmtype: KVM
+        vmtype: OS,KVM
         listable: yes
         create: no
         update: no
@@ -1713,11 +1762,15 @@ tab-complete UUIDs rather than having to type them out for every command.
         for the /tmp filesystem. This is only available for OS VMs, and doesn't
         make any sense for KVM VMs.
 
+        If set to 0 this indicates that you would like to not have /tmp mounted
+        as tmpfs at all. When changing to/from a "0" value, the VM must be
+        rebooted in order for the change to take effect.
+
         vmtype: OS
         listable: yes
         create: yes
         update: yes
-        default: max_swap
+        default: max_physical_memory
 
     transition_expire:
 
@@ -1901,7 +1954,7 @@ tab-complete UUIDs rather than having to type them out for every command.
         Specifies a compression algorithm used for this VM's root dataset. This
         option affects only the zoneroot dataset. Setting to 'on' is equivalent
         to setting to 'lzjb'. If you want more information about the specific
-        compression types, see the man page for zfs(1m).
+        compression types, see the man page for zfs(1M).
 
         WARNING: If you change this value for an existing VM, only *new* data
         will be compressed. It will not rewrite existing data compress.
@@ -2160,11 +2213,11 @@ The following exit values are returned:
 
 ## SEE ALSO
 
-    vmadmd(1m), zonecfg(1m), zoneadm(1m), zones(5)
+    vmadmd(1M), zonecfg(1M), zoneadm(1M), zones(5)
 
 ## NOTES
 
-Some of the vmadm commands depend on the vmadmd(1m) service:
+Some of the vmadm commands depend on the vmadmd(1M) service:
 
     svc/system/smartdc/vmadmd:default
 

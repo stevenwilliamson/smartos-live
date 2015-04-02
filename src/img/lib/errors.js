@@ -20,7 +20,7 @@
  *
  * CDDL HEADER END
  *
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
  *
  * * *
  * Error classes that imgadm may produce.
@@ -127,6 +127,40 @@ function ManifestValidationError(cause, errors) {
 }
 util.inherits(ManifestValidationError, ImgadmError);
 
+/**
+ * Errors when attempting to install/import an image when
+ * `requirements.min_platform` or `requirements.max_platform` fail.
+ *
+ * // JSSTYLED
+ * https://github.com/joyent/sdc-imgapi/blob/master/docs/index.md#manifest-requirementsmin_platform
+ */
+function MinPlatformError(platVer, platTimestamp, minPlatSpec) {
+    assert.string(platVer, 'platVer');
+    assert.string(platTimestamp, 'platTimestamp');
+    assert.object(minPlatSpec, 'minPlatSpec');
+    var message = format('current platform version, %s/%s, does not satisfy '
+        + 'requirements.min_platform=%j', platVer, platTimestamp, minPlatSpec);
+    ImgadmError.call(this, {
+        message: message,
+        code: 'MinPlatform'
+    });
+}
+util.inherits(MinPlatformError, ImgadmError);
+
+function MaxPlatformError(platVer, platTimestamp, maxPlatSpec) {
+    assert.string(platVer, 'platVer');
+    assert.string(platTimestamp, 'platTimestamp');
+    assert.object(maxPlatSpec, 'maxPlatSpec');
+    var message = format('current platform version, %s/%s, does not satisfy '
+        + 'requirements.max_platform=%j', platVer, platTimestamp, maxPlatSpec);
+    ImgadmError.call(this, {
+        message: message,
+        code: 'MaxPlatform'
+    });
+}
+util.inherits(MaxPlatformError, ImgadmError);
+
+
 function NoSourcesError() {
     ImgadmError.call(this, {
         message: 'imgadm has no configured sources',
@@ -148,8 +182,8 @@ function SourcePingError(cause, source) {
     }
     ImgadmError.call(this, {
         cause: cause,
-        message: format('unexpected ping error with image source "%s" (%s)%s',
-            source.url, source.type, details),
+        message: format('unexpected ping error with "%s" image source "%s"%s',
+            source.type, source.url, details),
         code: 'SourcePing',
         exitStatus: 1
     });
@@ -333,20 +367,35 @@ function OriginHasNoFinalSnapshotError(cause, originUuid) {
 }
 util.inherits(OriginHasNoFinalSnapshotError, ImgadmError);
 
-function ActiveImageNotFoundError(cause, uuid) {
-    if (uuid === undefined) {
-        uuid = cause;
+function ActiveImageNotFoundError(cause, arg) {
+    if (arg === undefined) {
+        arg = cause;
         cause = undefined;
     }
-    assert.string(uuid);
+    assert.string(arg, 'arg');
     ImgadmError.call(this, {
         cause: cause,
-        message: format('an active image "%s" was not found', uuid),
+        message: format('an active image "%s" was not found', arg),
         code: 'ActiveImageNotFound',
         exitStatus: 1
     });
 }
 util.inherits(ActiveImageNotFoundError, ImgadmError);
+
+function DockerRepoNotFoundError(cause, repo) {
+    if (repo === undefined) {
+        repo = cause;
+        cause = undefined;
+    }
+    assert.string(repo, 'repo');
+    ImgadmError.call(this, {
+        cause: cause,
+        message: format('docker repo "%s" was not found', repo),
+        code: 'DockerRepoNotFound',
+        exitStatus: 1
+    });
+}
+util.inherits(DockerRepoNotFoundError, ImgadmError);
 
 function ImageNotActiveError(cause, uuid) {
     if (uuid === undefined) {
@@ -453,6 +502,20 @@ function InvalidUUIDError(cause, uuid) {
     });
 }
 util.inherits(InvalidUUIDError, ImgadmError);
+
+function InvalidArgumentError(cause, message) {
+    if (message === undefined) {
+        message = cause;
+        cause = undefined;
+    }
+    ImgadmError.call(this, {
+        cause: cause,
+        message: message,
+        code: 'InvalidArgument',
+        exitStatus: 1
+    });
+}
+util.inherits(InvalidArgumentError, ImgadmError);
 
 function InvalidManifestError(cause) {
     assert.optionalObject(cause);
@@ -723,6 +786,9 @@ module.exports = {
     ImgadmError: ImgadmError,
     InternalError: InternalError,
     InvalidUUIDError: InvalidUUIDError,
+    InvalidArgumentError: InvalidArgumentError,
+    MinPlatformError: MinPlatformError,
+    MaxPlatformError: MaxPlatformError,
     NoSourcesError: NoSourcesError,
     SourcePingError: SourcePingError,
     OriginNotFoundInSourceError: OriginNotFoundInSourceError,
@@ -736,6 +802,7 @@ module.exports = {
     OriginHasNoFinalSnapshotError: OriginHasNoFinalSnapshotError,
     ManifestValidationError: ManifestValidationError,
     ActiveImageNotFoundError: ActiveImageNotFoundError,
+    DockerRepoNotFoundError: DockerRepoNotFoundError,
     ImageNotActiveError: ImageNotActiveError,
     ImageNotInstalledError: ImageNotInstalledError,
     ImageHasDependentClonesError: ImageHasDependentClonesError,

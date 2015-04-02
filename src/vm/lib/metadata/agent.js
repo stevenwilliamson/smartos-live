@@ -28,6 +28,7 @@ var sdc_fields = [
     'force_metadata_socket',
     'fs_allowed',
     'hostname',
+    'internal_metadata_namespaces',
     'limit_priv',
     'last_modified',
     'maintain_resolvers',
@@ -52,6 +53,7 @@ var sdc_fields = [
     'zonepath',
     'zonename'
 ];
+var MAX_RETRY = 300; // in seconds
 
 var MetadataAgent = module.exports = function (options) {
     this.log = options.log;
@@ -339,7 +341,13 @@ function (zonename, callback) {
     var zlog = self.zlog[zonename];
     var zonePath = self.zones[zonename].zonepath;
     var localpath = '/.zonecontrol';
-    var zonecontrolpath = path.join(zonePath, 'root', localpath);
+    var zonecontrolpath;
+
+    if (self.zones[zonename].brand === 'lx') {
+        localpath = '/native' + localpath;
+    }
+
+    zonecontrolpath = path.join(zonePath, 'root', localpath);
 
     zlog.info('Starting socket server');
 
@@ -368,7 +376,7 @@ function (zonename, callback) {
             return;
         }
 
-        self.createZoneSocket(zopts, function (createErr) {
+        self.createZoneSocket(zopts, undefined, function (createErr) {
             if (createErr) {
                 // We call callback here, but don't include the error because
                 // this is running in async.forEach and we don't want to fail
@@ -388,32 +396,59 @@ function (zonename, callback) {
     });
 };
 
-MetadataAgent.prototype.createZoneSocket =
-function (zopts, callback, waitSecs) {
-    var self = this;
+/*
+ * waitSecs here indicates how long we should wait to retry after this attempt
+ * if we fail.
+ */
+function attemptCreateZoneSocket(self, zopts, waitSecs) {
     var zlog = self.zlog[zopts.zone];
-    waitSecs = waitSecs || 1;
 
-    zsock.createZoneSocket(zopts, function (error, fd) {
-        if (error) {
-            // If we get errors trying to create the zone socket, wait and then
-            // keep retrying.
-            waitSecs = waitSecs * 2;
-            zlog.error(
-                { err: error },
-                'createZoneSocket error, %s seconds before next attempt',
-                waitSecs);
-            assert(!self.zoneRetryTimeouts[zopts.zone], 'timeout already set'
-                + ' for zone ' + zopts.zone + ', should have been cleared.');
-            self.zoneRetryTimeouts[zopts.zone] =
-                setTimeout(function () {
-                    self.zoneRetryTimeouts[zopts.zone] = null;
-                    self.createZoneSocket(zopts, callback, waitSecs);
-                }, waitSecs * 1000);
+    if (!zlog) {
+        // if there's no zone-specific logger, use the global one
+        zlog = self.log;
+    }
+
+    zlog.debug('attemptCreateZoneSocket(): zone: %s, wait: %d', zopts.zone,
+        waitSecs);
+
+    function _retryCreateZoneSocketLater() {
+        if (self.zoneRetryTimeouts[zopts.zone]) {
+            zlog.error('_retryCreateZoneSocketLater(): already have a retry '
+                + 'running, not starting another one.');
             return;
         }
 
-        var server = net.createServer(function (socket) {
+        zlog.info('Will retry zsock creation for %s in %d seconds',
+            zopts.zone, waitSecs);
+
+        self.zoneRetryTimeouts[zopts.zone] = setTimeout(function () {
+            var nextRetry = waitSecs * 2;
+
+            if (nextRetry > MAX_RETRY) {
+                nextRetry = MAX_RETRY;
+            }
+
+            zlog.info('Retrying %s', zopts.zone);
+            self.zoneRetryTimeouts[zopts.zone] = null;
+            process.nextTick(function () {
+                attemptCreateZoneSocket(self, zopts, nextRetry);
+            });
+        }, waitSecs * 1000);
+    }
+
+    zsock.createZoneSocket(zopts, function (error, fd) {
+        var server;
+
+        if (error) {
+            // If we get errors trying to create the zone socket, setup a retry
+            // loop and return.
+            zlog.error({err: error}, 'createZoneSocket error, %s seconds before'
+                + ' next attempt', waitSecs);
+            _retryCreateZoneSocketLater();
+            return;
+        }
+
+        server = net.createServer(function (socket) {
             var handler = self.makeMetadataHandler(zopts.zone, socket);
             var buffer = '';
 
@@ -436,13 +471,13 @@ function (zopts, callback, waitSecs) {
                     + 'socket and server.');
                 try {
                     server.close();
+                    socket.end();
                 } catch (e) {
-                    zlog.error({err: e}, 'Caught exception closing server: '
-                        + e.message);
+                    zlog.error({err: e}, 'Caught exception closing server: %s',
+                        e.message);
                 }
-
-                socket.end();
-                self.createZoneSocket(zopts);
+                _retryCreateZoneSocketLater();
+                return;
             });
         });
 
@@ -486,10 +521,21 @@ function (zopts, callback, waitSecs) {
             }
         };
 
-        server.on('error', function (e) {
-            zlog.error({err: e}, 'Zone socket error: ' + e.message);
-            if (e.code !== 'EINTR') {
-                throw e;
+        server.on('error', function (err) {
+            zlog.error({err: err}, 'Zone socket error: %s', err.message);
+            if (err.code === 'ENOTSOCK' || err.code === 'EBADF') {
+                // the socket inside the zone went away,
+                // likely due to resource constraints (ie: disk full)
+                try {
+                    server.close();
+                } catch (e) {
+                    zlog.error({err: e}, 'Caught exception closing server: '
+                        + e.message);
+                }
+                // start the retry timer
+                _retryCreateZoneSocketLater();
+            } else if (err.code !== 'EINTR') {
+                throw err;
             }
         });
 
@@ -500,11 +546,19 @@ function (zopts, callback, waitSecs) {
         server._handle = p;
 
         server.listen();
-
-        if (callback) {
-            callback();
-        }
     });
+}
+
+MetadataAgent.prototype.createZoneSocket =
+function (zopts, waitSecs, callback) {
+    var self = this;
+    waitSecs = waitSecs || 1;
+
+    attemptCreateZoneSocket(self, zopts, waitSecs);
+
+    if (callback) {
+        callback();
+    }
 };
 
 function base64_decode(input) {
@@ -513,6 +567,30 @@ function base64_decode(input) {
     } catch (err) {
         return null;
     }
+}
+
+function internalNamespace(vmobj, want)
+{
+    var internal_namespace = null;
+    var prefix;
+
+    /*
+     * If we have a ':' we need to check against namespaces. If it is in the
+     * list, we're dealing with read-only internal_metadata instead of
+     * customer_metadata.
+     */
+    if ((want.indexOf(':') !== -1)
+        && vmobj.hasOwnProperty('internal_metadata_namespaces')) {
+
+        prefix = (want.split(':'))[0];
+        vmobj.internal_metadata_namespaces.forEach(function (ns) {
+            if (ns === prefix) {
+                internal_namespace = prefix;
+            }
+        });
+    }
+
+    return (internal_namespace);
 }
 
 MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
@@ -529,6 +607,7 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
 
     return function (data) {
         var cmd;
+        var ns;
         var parts;
         var val;
         var vmobj;
@@ -594,6 +673,15 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
                         // See NOTE above about nics, same applies to resolvers.
                         // It's here solely for the use of mdata-fetch.
                         val = JSON.stringify(self.zones[zone].resolvers);
+                        returnit(null, val);
+                        return;
+                    });
+                } else if (want === 'tmpfs'
+                    && vmobj.hasOwnProperty('tmpfs')) {
+                    // We want tmpfs to reload the cache right away because we
+                    // might be depending on a /etc/vfstab update
+                    self.updateZone(zone, function () {
+                        val = JSON.stringify(self.zones[zone].tmpfs);
                         returnit(null, val);
                         return;
                     });
@@ -675,6 +763,10 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
                         which_mdata = 'internal_metadata';
                     }
 
+                    if (internalNamespace(vmobj, want) !== null) {
+                        which_mdata = 'internal_metadata';
+                    }
+
                     if (vmobj.hasOwnProperty(which_mdata)) {
                         returnit(null, vmobj[which_mdata][want]);
                         return;
@@ -700,6 +792,18 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
             }
 
             zlog.info('Serving DELETE ' + want);
+
+            if (want.slice(0, 4) === 'sdc:') {
+                returnit(new Error('Cannot update the "sdc" Namespace.'));
+                return;
+            }
+
+            ns = internalNamespace(vmobj, want);
+            if (ns !== null) {
+                returnit(new Error('Cannot update the "' + ns
+                    + '" Namespace.'));
+                return;
+            }
 
             setMetadata(want, null, function (err) {
                 if (err) {
@@ -735,6 +839,13 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
                 return;
             }
 
+            ns = internalNamespace(vmobj, key);
+            if (ns !== null) {
+                returnit(new Error('Cannot update the "' + ns
+                    + '" Namespace.'));
+                return;
+            }
+
             zlog.info('Serving PUT ' + key);
             setMetadata(key, value, function (err) {
                 if (err) {
@@ -758,17 +869,22 @@ MetadataAgent.prototype.makeMetadataHandler = function (zone, socket) {
                     return;
                 }
 
-                // *_pw$ keys come from internal_metadata, everything else comes
-                // from customer_metadata
+                /*
+                 * Keys that match *_pw$ and internal_metadata_namespace
+                 * prefixed keys come from internal_metadata, everything else
+                 * comes from customer_metadata.
+                 */
                 ckeys = Object.keys(vmobj.customer_metadata)
                     .filter(function (k) {
 
-                    return (!k.match(/_pw$/));
+                    return (!k.match(/_pw$/)
+                        && internalNamespace(vmobj, k) === null);
                 });
                 ikeys = Object.keys(vmobj.internal_metadata)
                     .filter(function (k) {
 
-                    return (k.match(/_pw$/));
+                    return (k.match(/_pw$/)
+                        || internalNamespace(vmobj, k) !== null);
                 });
 
                 returnit(null, ckeys.concat(ikeys).join('\n'));

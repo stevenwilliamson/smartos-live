@@ -17,6 +17,7 @@
 /src/zfs_recv
 /src/zfs_send
 /src/zoneevent
+/src/img/tmp
 /src/vm/tests.tar.gz
 /src/node-kstat/.lock-wscript
 /src/node-kstat/build
@@ -28,6 +29,7 @@
 /src/node-*/src/mapfile_node
 /src/node-*/src/v8plus_errno.c
 /src/node-*/src/v8plus_errno.h
+/src/ntp_config
 /tools/builder/builder
 /tools/builder/*.o
 /tools/builder/users.c
@@ -58,6 +60,7 @@ man/man/man1m/diskinfo.1m
 man/man/man1m/disklayout.1m
 man/man/man1m/mkzpool.1m
 man/man/man5/fwrule.5
+src/cryptpass
 src/diskinfo
 src/disklayout
 src/mkzpool
@@ -79,4 +82,6 @@ boot.manifest.d/
 manifest.d/
 overlay/order
 overlay/sdc
+overlay/smartos
 pkgsrc/*.tgz
+.*.swp
