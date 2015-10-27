@@ -1,0 +1,9 @@
+d . 0755 root sys
+d etc 0755 root sys
+d kernel 0755 root sys
+d kernel/drv 0755 root sys
+d smartdc 0755 root sys
+d smartdc/lib 0755 root sys
+f etc/issue 0644 root sys
+f kernel/drv/sd.conf 0644 root sys
+f smartdc/lib/smartos_prompt_config.sh 0555 root root
